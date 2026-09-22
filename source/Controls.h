@@ -210,7 +210,11 @@ float SunSizeFromParam( float value );
 /// Reflection: 0 to 3 times the Fresnel reflectance, linearly. 1 is physical.
 float ReflectionFromParam( float value );
 
-/// Glint: the sun's radiance relative to the sky's, 0 to 30, linearly.
+/// Glint: the sun's radiance relative to the sky's, 5000 * value^3, so 0 is
+/// none and the default 0.3 is 135. It has to be that big: the reflection is
+/// Fresnel-weighted, 2% looking down, and the real sun is 10^4 to 10^5 times
+/// the sky -- a glint is a point where 2% of that is still far past white.
+/// A range that topped out at 30 (the first one did) could never make one.
 float GlintFromParam( float value );
 
 /// The skim physics' gravity. Not a control: it is the same g the waves use.

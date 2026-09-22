@@ -460,8 +460,7 @@ uniform float Reflection;
 uniform vec3 Sky;
 uniform vec3 SunTravel;
 uniform float Glint;
-uniform float SunCosInner;
-uniform float SunCosOuter;
+uniform float SunRadius;   //radians
 
 uniform int View;
 uniform float HeightGain;
@@ -511,9 +510,18 @@ void main()
 	//picture has nothing.
 	float R        = min( fresnel( normal.z ) * Reflection, 1.0 );
 	vec3 reflected = reflect( view, normal );
-	float toSun    = dot( reflected, -SunTravel );
-	float disc     = smoothstep( SunCosOuter, SunCosInner, toSun );
-	vec3 above     = ( Sky + vec3( Glint * disc ) ) * bed.a;
+	float toSun    = acos( clamp( dot( reflected, -SunTravel ), -1.0, 1.0 ) );
+
+	//The sun's disc, seen in the water. A pixel does not reflect one
+	//direction but the spread of them its patch of surface faces -- fwidth of
+	//the reflected ray -- and a disc smaller than that spread would be hit by
+	//pixel centres only by luck: the glints were a line too thin to land on
+	//any. So the disc is widened to the pixel's spread and dimmed by the same
+	//area ratio, which keeps each glint's energy what the sun would give it.
+	float spread = length( fwidth( reflected ) );
+	float seen   = sqrt( SunRadius * SunRadius + spread * spread );
+	float disc   = ( 1.0 - smoothstep( 0.6 * seen, 1.4 * seen, toSun ) ) * ( SunRadius * SunRadius ) / ( seen * seen );
+	vec3 above   = ( Sky + vec3( Glint * disc ) ) * bed.a;
 
 	vec4 result = vec4( ( 1.0 - R ) * bed.rgb * lit + R * above, bed.a );
 

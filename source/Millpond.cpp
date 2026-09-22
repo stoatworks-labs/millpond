@@ -98,7 +98,7 @@ MillpondPlugin::MillpondPlugin()
 	// a picture that looks untouched until somebody finds the Drop button.
 	//-------------------------------------------------------------------
 	params[ PT_POND_SIZE ] = 0.511f;//1.5 m of frame height
-	params[ PT_DEPTH ]     = 0.667f;//0.2 m
+	params[ PT_DEPTH ]     = 0.725f;//0.3 m
 	params[ PT_TENSION ]   = 0.5f;  //clean water
 	params[ PT_VISCOSITY ] = 0.2f;  //water, 1e-6 m^2/s
 	params[ PT_SPEED ]     = ParamFromSpeed( 1.0f );
@@ -109,8 +109,8 @@ MillpondPlugin::MillpondPlugin()
 	params[ PT_DROP ]        = 0.0f;
 	params[ PT_PEBBLE_X ]    = 0.5f;
 	params[ PT_PEBBLE_Y ]    = 0.5f;
-	params[ PT_PEBBLE_SIZE ] = 0.59f;//2 cm: gravity rings leading, capillary ripples inside
-	params[ PT_SPLASH ]      = 0.5f; //crater 0.3 of its radius deep
+	params[ PT_PEBBLE_SIZE ] = 0.73f;//3.5 cm: gravity rings leading, capillary ripples inside
+	params[ PT_SPLASH ]      = 0.8f; //crater half its radius deep: a thrown stone, not a dropped one
 	params[ PT_SCATTER ]     = 0.0f;
 
 	params[ PT_SKIM ]        = 0.0f;
@@ -126,14 +126,14 @@ MillpondPlugin::MillpondPlugin()
 	params[ PT_AUDIO_RAIN ]    = 0.0f;
 
 	params[ PT_CAUSTICS ]      = 0.5f;  //physical
-	params[ PT_SUN_ELEVATION ] = 0.75f; //70 degrees
+	params[ PT_SUN_ELEVATION ] = 0.9375f;//85 degrees: see AGENTS.md, a straight-down camera only sees glints under a high sun
 	params[ PT_SUN_AZIMUTH ]   = 0.35f; //126 degrees
 	params[ PT_SUN_SIZE ]      = 0.39f; //0.6 degrees: a bright, slightly hazy sun
 	params[ PT_REFLECTION ]    = 1.0f / 3.0f;//physical
 	params[ PT_SKY_R ]         = 0.55f;
 	params[ PT_SKY_G ]         = 0.65f;
 	params[ PT_SKY_B ]         = 0.75f;
-	params[ PT_GLINT ]         = 0.3f;  //9x the sky
+	params[ PT_GLINT ]         = 0.3f;  //135x the sky: specks past white
 
 	params[ PT_VIEW ] = static_cast< float >( View::Picture );
 	params[ PT_MIX ]  = 1.0f;
@@ -893,10 +893,7 @@ FFResult MillpondPlugin::ProcessOpenGL( ProcessOpenGLStruct* pgl )
 		compositeShader.Set( "Sky", params[ PT_SKY_R ], params[ PT_SKY_G ], params[ PT_SKY_B ] );
 		compositeShader.Set( "SunTravel", sunTravel[ 0 ], sunTravel[ 1 ], sunTravel[ 2 ] );
 		compositeShader.Set( "Glint", GlintFromParam( params[ PT_GLINT ] ) );
-		//The sun's disc, with a soft rim so a glint does not pop in and out as
-		//a slope crosses one exact angle.
-		compositeShader.Set( "SunCosInner", std::cos( 0.6f * sunRadius ) );
-		compositeShader.Set( "SunCosOuter", std::cos( 1.4f * sunRadius ) );
+		compositeShader.Set( "SunRadius", sunRadius );
 		compositeShader.Set( "View", view );
 		//Height view: a crater as deep as the pebble's reads as full black.
 		const float crater = SplashFromParam( params[ PT_SPLASH ] ) * PebbleSizeFromParam( params[ PT_PEBBLE_SIZE ] );

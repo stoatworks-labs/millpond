@@ -132,7 +132,8 @@ float ReflectionFromParam( float value )
 
 float GlintFromParam( float value )
 {
-	return linear( value, 0.0f, 30.0f );
+	const float v = std::clamp( value, 0.0f, 1.0f );
+	return 5000.0f * v * v * v;
 }
 
 } // namespace millpond

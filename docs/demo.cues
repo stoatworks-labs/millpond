@@ -1,0 +1,35 @@
+# Millpond demo reel: 12 s at 60 fps.
+#     mptest --film 720 --size 1280x720 --script docs/demo.cues | ffmpeg ...
+# A pebble in the middle, a second off to one side, a skimmed stone across
+# the bottom third, then a squall.
+#
+# Tracks are held before their first key and interpolated BETWEEN keys, so
+# every button is keyed down for exactly one frame with a 0 on the frames
+# either side -- `29 Drop 0 / 30 Drop 1 / 31 Drop 0`. Without the key before,
+# the value ramps up from the last one and the press lands halfway there.
+0    Rain        0.2
+0    Pebble X    0.5
+0    Pebble Y    0.5
+0    Drop        0
+29   Drop        0
+30   Drop        1
+31   Drop        0
+140  Pebble X    0.5
+141  Pebble X    0.27
+140  Pebble Y    0.5
+141  Pebble Y    0.64
+149  Drop        0
+150  Drop        1
+151  Drop        0
+0    Skim        0
+290  Pebble X    0.27
+291  Pebble X    0.5
+290  Pebble Y    0.64
+291  Pebble Y    0.3
+299  Skim        0
+300  Skim        1
+301  Skim        0
+480  Rain        0.2
+520  Rain        0.55
+600  Rain        0.55
+660  Rain        0.2
