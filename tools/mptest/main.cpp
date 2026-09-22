@@ -933,25 +933,43 @@ int runModes( const Perturb& perturb )
 // near field, the Airy edges and the long waves out front are all in it.
 //===========================================================================
 
-/// J0 in double: the rational and asymptotic fits from Numerical Recipes
-/// (bessj0), good to about 1e-8 absolute, which is far below anything here.
+/// J0 in double, from its definitions: the power series below x = 12, where
+/// the largest term is about 4e3 and double keeps 1e-13 of the sum, and the
+/// Hankel asymptotic expansion above, whose first omitted term at x = 12 is
+/// under 1e-10. Written out here rather than borrowed.
 double besselJ0( double x )
 {
 	const double ax = std::fabs( x );
-	if( ax < 8.0 )
+	if( ax < 12.0 )
 	{
-		const double y  = x * x;
-		const double n1 = 57568490574.0
-		                  + y * ( -13362590354.0 + y * ( 651619640.7 + y * ( -11214424.18 + y * ( 77392.33017 + y * -184.9052456 ) ) ) );
-		const double d1 = 57568490411.0 + y * ( 1029532985.0 + y * ( 9494680.718 + y * ( 59272.64853 + y * ( 267.8532712 + y ) ) ) );
-		return n1 / d1;
+		const double q = 0.25 * ax * ax;
+		double term = 1.0, sum = 1.0;
+		for( int k = 1; k < 60; ++k )
+		{
+			term *= -q / ( static_cast< double >( k ) * k );
+			sum += term;
+			if( std::fabs( term ) < 1e-18 )
+				break;
+		}
+		return sum;
 	}
-	const double z  = 8.0 / ax;
-	const double y  = z * z;
-	const double xx = ax - 0.785398164;
-	const double p  = 1.0 + y * ( -0.1098628627e-2 + y * ( 0.2734510407e-4 + y * ( -0.2073370639e-5 + y * 0.2093887211e-6 ) ) );
-	const double q  = -0.1562499995e-1 + y * ( 0.1430488765e-3 + y * ( -0.6911147651e-5 + y * ( 0.7621095161e-6 - y * 0.934935152e-7 ) ) );
-	return std::sqrt( 0.636619772 / ax ) * ( std::cos( xx ) * p - z * std::sin( xx ) * q );
+
+	//J0(x) = sqrt( 2 / (pi x) ) ( P cos( x - pi/4 ) - Q sin( x - pi/4 ) ),
+	//P and Q the standard series in t_k = 1^2 3^2 .. (2k-1)^2 / ( k! (8x)^k ):
+	//P = 1 - t_2 + t_4 - ..., Q = -t_1 + t_3 - ...
+	const double z = 1.0 / ( 8.0 * ax );
+	double p = 1.0, q = 0.0, term = 1.0;
+	for( int k = 1; k <= 12; ++k )
+	{
+		const double odd = 2.0 * k - 1.0;
+		term *= odd * odd * z / k;
+		if( k % 2 == 1 )
+			q += ( ( k / 2 ) % 2 == 0 ? -1.0 : 1.0 ) * term;
+		else
+			p += ( ( k / 2 ) % 2 == 0 ? 1.0 : -1.0 ) * term;
+	}
+	const double phase = ax - 0.25 * kPi;
+	return std::sqrt( 2.0 / ( kPi * ax ) ) * ( p * std::cos( phase ) - q * std::sin( phase ) );
 }
 
 std::vector< double > cauchyPoisson( const Water& water, double a, double depthOfCrater, double t,

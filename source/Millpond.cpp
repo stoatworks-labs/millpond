@@ -895,9 +895,11 @@ FFResult MillpondPlugin::ProcessOpenGL( ProcessOpenGLStruct* pgl )
 		compositeShader.Set( "Glint", GlintFromParam( params[ PT_GLINT ] ) );
 		compositeShader.Set( "SunRadius", sunRadius );
 		compositeShader.Set( "View", view );
-		//Height view: a crater as deep as the pebble's reads as full black.
+		//Height view: full scale at a twentieth of the pebble's crater depth,
+		//which is about the height of its ring a second or two out. The crater
+		//itself clips, and should: it is the ring that is worth looking at.
 		const float crater = SplashFromParam( params[ PT_SPLASH ] ) * PebbleSizeFromParam( params[ PT_PEBBLE_SIZE ] );
-		compositeShader.Set( "HeightGain", 0.5f / std::max( 0.25f * crater, 1e-6f ) );
+		compositeShader.Set( "HeightGain", 0.5f / std::max( 0.05f * crater, 1e-6f ) );
 		compositeShader.Set( "MixAmount", params[ PT_MIX ] );
 		quad.Draw();
 	}
