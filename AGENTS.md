@@ -142,7 +142,8 @@ the triangle size.
 truncating.** Still water's area over itself came out 0.99999994. In R16F that
 truncated to 0.99951, a visible step dark on 6% of the pixels, and it biased
 every deposit down by half a step. The buffer is R32F. Float blending works
-here; it is also standard on DX11-class Windows parts, but untested there.
+here and on llvmpipe in win-lab's Arena; it is also standard on DX11-class
+Windows GPUs, but untested on one.
 
 **η and η_t share a transform, and η_t is ω times bigger.** A transform's
 rounding is relative to the larger thing it carries. Unscaled, η_t drowned η:
@@ -295,8 +296,8 @@ negative control in `--negative`, and all 13 fail against their wrong model.
 - **Defaults are chosen to be seen:** light rain on, a 3.5 cm stone, a crater
   half its radius deep, 0.3 m of water, an 85° sun. A water effect that does
   nothing until someone finds the Drop button reads as broken.
-- **Provisional About/ATTRIBUTIONS** hand copies with `guide = ""`, as in the
-  rest of the unreleased tranche.
+- **About is generated** by `sync-about.py` (with `guide = ""`: there is no
+  user guide). `ATTRIBUTIONS.md` is still a provisional hand copy.
 
 ## What is genuinely verified, and what is assumed
 
@@ -308,14 +309,20 @@ frames.
 
 Assumed, or not yet done:
 
-- **Never loaded into Resolume.** Unknown there: how 39 parameters in seven
-  groups present, whether the XPOS/YPOS pair shows as a position pad, whether
-  Resolume's clock arrives in seconds or milliseconds for this plugin (it is
-  voted on), and whether event parameters show as buttons that send 1 then 0.
+- **Loaded into Resolume only on Windows, on llvmpipe.** In win-lab's Arena
+  7.27.1 (no GPU), `plugin-bench/arena/arenaprobe.py` found it registered and
+  listed, with all 40 controls declared correctly, and saw it render with Arena
+  logging no errors. The plugin voted Arena's clock to be milliseconds. The
+  probe's control sweep never presses Drop or Skim, so it reports Surface
+  Tension, Banks, Pebble Size, Heading and Throw Speed as dead: that is its
+  blind spot, not a defect. Still unknown: anything on macOS Arena, anything
+  on a GPU in Resolume, whether the XPOS/YPOS pair shows as a position pad, and
+  how the event parameters behave under a real click.
 - **Resolume's FFT bins** are assumed to be what rosette assumed; the fleet has
   never measured them.
-- **Windows never built or run.** R32F additive blending and vertex texture
-  fetch are standard on DX11-class GPUs but untested here.
+- **Windows only on llvmpipe.** It builds under MSVC 2022, and R32F additive
+  blending and vertex texture fetch work on llvmpipe. They are standard on
+  DX11-class GPUs, but untested on one.
 - **The GPU-less CI runner** would run the transforms in software. It has not
   been tried; `verify.sh` is ~80 s here, and the sweep and `--negative` are
   the slow parts to gate if it crawls.

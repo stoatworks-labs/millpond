@@ -126,14 +126,33 @@ need a high sun, and the default is 85°.
 
 **v0.1.0, 2026-09-23, and honestly early.**
 
-It has **never been loaded into Resolume**. Everything here comes from the
-offline harness, which drives the real plugin class headlessly. `oxbow probe`
-reads the bundle the way a host does and finds `SW Millpond` / `MP01` /
-effect, and `oxbow selftest` instantiates it through the host's own path and
-renders 120 frames. Nothing else has run it. There is no OpenFX port, no
-browser demo and no factory presets. It has only been built and measured on
-macOS (Apple Silicon, M4 Max). A Windows build ships from CI and nothing has
-run it.
+It has been loaded into **Resolume Arena 7.27.1 on Windows only, and only on
+a software rasteriser**. The machine is win-lab, an x64 Windows 11 VM with
+no GPU, where OpenGL is Mesa llvmpipe 26.2.0. The DLL was built there with
+MSVC 2022 and vcpkg's `x64-windows-static-md`. In Arena:
+
+- it loaded, and was registered and listed as `SW Millpond` / `MP01`, an
+  effect;
+- all 40 controls came back with the declared name, order, type, range and
+  default;
+- the shaders compiled and it rendered. The plugin's own log recorded
+  `GL vendor=Mesa … 4.5 (Core Profile)` and `initialised`, and it read
+  Arena's clock as milliseconds;
+- Arena stayed up and logged no errors through the whole control sweep.
+
+That sweep reported five controls as having no effect: Surface Tension,
+Banks, Pebble Size, Heading and Throw Speed. Each one shapes the next pebble
+or skim, or acts on waves that reach the bank. The probe never presses Drop
+or Skim, so it cannot see them. The harness here measures all five live. The
+rest of the controls moved the picture, but the rain keeps the water moving
+on its own, so a pass there says less than it would for a still picture.
+
+`oxbow selftest` on the same VM rendered 120 frames with no GL error. Nothing
+is known about performance on Windows, and it has never been loaded into
+Arena on macOS. Offline, `oxbow probe` reads the bundle the way a host does,
+and `oxbow selftest` instantiates it through the host's own path. There is no
+OpenFX port, no browser demo and no factory presets. Everything below was
+built and measured on macOS (Apple Silicon, M4 Max).
 
 What is measured, on this machine:
 
