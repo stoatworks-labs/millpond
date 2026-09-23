@@ -105,7 +105,8 @@ started.
   comes in from the bank on the far side of Pebble X/Y and passes through
   that point.
 - **Rain:** Rain (drops per second, a Poisson process in water-time, so a
-  frozen pond has no rain on it) and Rain Size.
+  frozen pond has no rain on it) and Rain Size. Raindrops have their own
+  crater depth; Splash is the pebble's.
 - **Audio:** Audio (Resolume's FFT buffer). Audio Pebbles is the onset
   detector's sensitivity and on/off switch: each hit drops a pebble, its
   splash following how hard the hit was. Audio Rain thickens the rain with the
@@ -144,14 +145,15 @@ What is measured, on this machine:
 | capillary rings | the same with surface tension, at 3 s and 5 s: **0.019%** and **0.018%** |
 | the still disc | inside 0.85 c_min t, **0.77%** (at 3 s) and **0.01%** (at 5 s) of the ring's height; the ring's edge **1.2 cm** and **0.7 cm** from the Airy prediction |
 | shallow water | in 1 cm of water the front is at **0.634 m** after 2 s; √(g h) t is 0.626 m |
-| banks | Open keeps **0.0000** of the frame's energy after 10 s, Walls keeps **0.844**; the walled pond is its own mirror image to **3.6e-5** |
+| banks | Open keeps **0.0000** of the frame's energy after 10 s, and so does a 20 m, 2 m deep pond after 90 s. Walls keeps **0.844**; the walled pond is its own mirror image to **3.6e-5** |
 | refraction | the bed's displacement against Snell's law, both axes, at 480×270 and 1280×720: worst **0.036 mm** error on 9.3 mm of displacement |
 | Fresnel | **0.02037** looking straight down; worst error **1.8e-4** on slopes to 50° |
-| caustics | still water **1 ± 1.2e-7** at every pixel; heavy rain with the sun sharp and hazy: mean light **1.0011**; a plane wave focuses to 1/(dx′/dx) at every pixel |
-| still water | the output is the picture to **3e-7** with Reflection at 0, and exactly (1 − R₀)·picture + R₀·sky with it at 1 |
-| the skim | 10 touches and the sink; hops d₀(1 − n/N) to **5e-8 m**; flights 2V₀√(1 − n/N) sin β/g |
+| caustics | still water **1 ± 1.2e-7** at every pixel; heavy rain with the sun sharp and hazy: mean light **1.0017**; a plane wave focuses to 1/(dx′/dx) in every column, with the sun overhead and 55° up on either side (the oblique suns pin its direction) |
+| still water | the output is the picture to **3e-7** with Reflection at 0, and exactly (1 − R₀)·picture + R₀·sky with it at 1. The same holds for a host texture padded beyond its picture (MaxUV), and rain never shows the padding |
+| the skim | 10 touches and the sink; hops d₀(1 − n/N) to **5e-8 m**; flights 2V₀√(1 − n/N) sin β/g. A throw harder than the pond stops at the far bank |
 | rain | 776 drops in 150 s against 768 ± 111 expected; none at Speed 0 |
 | audio | silence drops nothing; a beat every half second drops **19** pebbles in 10 s. The 20th hit is on frame 0, where nothing can have risen yet |
+| GL state | viewport, vertex array, program, active unit, framebuffer, blend, scissor, clear colour and eight texture units are all as the host left them, over three frames |
 | negative controls | **13** deliberately wrong models, **all 13** detected |
 | dead controls | **31** parameters, all live |
 
@@ -173,8 +175,10 @@ What is **not** verified, and is the honest limit of this release:
 - **Events land on frames.** A pebble goes into the frame in which its time
   falls, up to one frame early. At 60 fps that is 17 ms, a tenth of a skim's
   quickest hop.
-- **The Open banks' sponge** is measured to absorb what reaches it, but it is
-  not perfect for the very longest waves on the very smallest ponds.
+- **The Open banks' sponge** is tuned to take six e-foldings out of the
+  fastest wave the pond can hold, on the way in alone, and more out of every
+  slower one. `--banks` measures it on a half-metre pond; nothing has measured
+  the reflection of a sponge that strong on the shortest ripples.
 
 ## Build
 
@@ -204,6 +208,7 @@ The offline harness renders the real plugin class headlessly:
     ./build/mptest --skim-check           the hops shorten linearly
     ./build/mptest --rain                 Poisson at the rate asked for
     ./build/mptest --audio                a beat drops a pebble a beat
+    ./build/mptest --state                the host's GL state comes back as it went in
     ./build/mptest --negative             every check above, against a wrong model
     ./build/mptest --bench                720p through 4K
     python3 tools/sweep.py                no control is silently dead

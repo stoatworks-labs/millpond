@@ -203,6 +203,7 @@ private:
 	double now          = 0.0;
 	double lastNow      = -1.0;
 	double simTime      = 0.0;
+	bool settledJump    = false;///< the unit vote settled this frame: no dt across it
 
 	//-------------------------------------------------------------------
 	// Events.

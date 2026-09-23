@@ -412,7 +412,15 @@ void MillpondPlugin::UpdateClock()
 				++millisVotes;
 
 			if( secondsVotes >= kClockVotes || millisVotes >= kClockVotes )
+			{
 				clockScale = millisVotes > secondsVotes ? 0.001 : 1.0;
+				//The clock is about to jump from wall time since the first
+				//frame to the host's own, which can be hours in. Without
+				//this the frame that settles the vote advanced the water by
+				//the whole clamp -- a quarter second at once, a lurch and a
+				//burst of rain.
+				settledJump = true;
+			}
 		}
 	}
 
@@ -462,6 +470,11 @@ void MillpondPlugin::RandomPoint( float centreX, float centreY, float scatter, f
 	const double angle = 2.0 * kPi * random.Uniform();
 	x += static_cast< float >( r * std::cos( angle ) );
 	y += static_cast< float >( r * std::sin( angle ) );
+
+	//Into the frame: the grid is periodic, so a pebble scattered off the
+	//edge would land on the other side of the pond.
+	x = std::clamp( x, 0.0f, frameWidth );
+	y = std::clamp( y, 0.0f, frameHeight );
 }
 
 //---------------------------------------------------------------------------
@@ -508,6 +521,13 @@ std::vector< Impact > MillpondPlugin::CollectImpacts( double dt )
 		//an ordinary thing to do.
 		for( const Impact& touch : skim )
 		{
+			//A stone that reaches the far bank stops there. Without this a
+			//hard throw's later touches land past the frame, and the grid is
+			//periodic -- they would wrap round and splash back in at random
+			//places, and with Walls every one would mirror into the pool.
+			if( touch.x < -touch.radius || touch.x > frameWidth + touch.radius || touch.y < -touch.radius
+			    || touch.y > frameHeight + touch.radius )
+				break;
 			auto at = std::upper_bound( pending.begin(), pending.end(), touch,
 			                            []( const Impact& a, const Impact& b ) { return a.time < b.time; } );
 			pending.insert( at, touch );
@@ -532,8 +552,11 @@ std::vector< Impact > MillpondPlugin::CollectImpacts( double dt )
 		drop.time      = simTime;
 		drop.x         = static_cast< float >( random.Uniform() * frameWidth );
 		drop.y         = static_cast< float >( random.Uniform() * frameHeight );
-		drop.radius    = rainSize * static_cast< float >( 0.7 + 0.6 * random.Uniform() );
-		drop.amplitude = splash * drop.radius;
+		drop.radius = rainSize * static_cast< float >( 0.7 + 0.6 * random.Uniform() );
+		//Rain has its own crater depth, half its radius. Tying it to Splash
+		//(which lives in the Pebble group) turned the rain off at Splash 0
+		//without anything in the Rain group saying so.
+		drop.amplitude = kRainSplash * drop.radius;
 		due.push_back( drop );
 	}
 
@@ -606,13 +629,18 @@ void MillpondPlugin::Simulate( const std::vector< Impact >& impacts, double dt )
 		drops[ i * 4 + 3 ] = impacts[ i ].amplitude;
 	}
 
-	//The absorber's strength. It has to take out a wave crossing a margin
-	//half a frame wide, and the slowest energy is the ripples at the minimum
-	//group velocity, about 0.18 m/s: a peak rate of 9 over the margin in
-	//metres integrates to several e-foldings across the quadratic ramp for
-	//anything from 0.1 m to 20 m of pond. `mptest --banks` measures it.
-	const float margin      = 0.5f * std::min( frameWidth, frameHeight );
-	const float spongeRate  = 9.0f / std::max( margin, 0.01f );
+	//The absorber's strength. A wave crossing the margin (half a frame, a
+	//quadratic ramp to SpongeRate) at group velocity v loses
+	//SpongeRate * margin / ( 3 v ) e-foldings of amplitude, so the rate is set
+	//from the FASTEST wave the domain can hold -- its longest, whose group
+	//velocity on a big deep pond is metres a second -- to give that one six.
+	//Slower waves get more. (A fixed rate, the first version, gave a 20 m,
+	//2 m deep pond's longest waves barely two, and a tenth of them came back
+	//in from the far side.) `mptest --banks` measures it.
+	const double longest  = 2.0 * 3.14159265358979 / std::max( grid.lx, grid.ly );
+	const double fastest  = std::max( GroupVelocity( longest, water ), 0.18 );
+	const float margin    = 0.5f * std::min( frameWidth, frameHeight );
+	const float spongeRate = static_cast< float >( 18.0 * fastest ) / std::max( margin, 0.01f );
 
 	//-------------------------------------------------------------------
 	// 1. Inject: state times sponge, plus craters, into spectrum[ 0 ].
@@ -801,6 +829,11 @@ FFResult MillpondPlugin::ProcessOpenGL( ProcessOpenGLStruct* pgl )
 	// Time.
 	//-------------------------------------------------------------------
 	UpdateClock();
+	if( settledJump )
+	{
+		lastNow     = -1.0;
+		settledJump = false;
+	}
 	const double hostDt = lastNow >= 0.0 ? std::clamp( now - lastNow, 0.0, kMaxFrameDelta ) : 0.0;
 	lastNow             = now;
 	UpdateAudio( hostDt );
@@ -902,6 +935,9 @@ FFResult MillpondPlugin::ProcessOpenGL( ProcessOpenGLStruct* pgl )
 		compositeShader.Set( "HeightGain", 0.5f / std::max( 0.05f * crater, 1e-6f ) );
 		compositeShader.Set( "MixAmount", params[ PT_MIX ] );
 		quad.Draw();
+
+		//Three units: the scoped bindings cannot unwind them all. See GLState.h.
+		releaseTextureUnits( 3 );
 	}
 
 	return FF_SUCCESS;

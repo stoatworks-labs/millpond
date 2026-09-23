@@ -44,6 +44,7 @@
         --skim         the hops shorten linearly, then the stone sinks
         --rain         the rain is Poisson at the rate asked for
         --audio        silence drops nothing; a beat drops a pebble a beat
+        --state        the GL state the host hands over is the state it gets back
         --negative     every check above, against a wrong model, must fail
         --bench        time a frame at 720p through 4K
 
@@ -378,6 +379,29 @@ GLuint makeTexture( int width, int height, const float* pixels )
 	glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
 	glBindTexture( GL_TEXTURE_2D, 0 );
 	return texture;
+}
+
+/// The host's texture can be bigger than its picture (HardwareWidth > Width),
+/// with the picture in the corner and MaxUV saying how much of it is real.
+/// A padded copy of `picture`: magenta everywhere outside it.
+GLuint paddedTexture( const Floats& picture, int width, int height, int hw, int hh )
+{
+	Floats padded( static_cast< size_t >( hw ) * hh * 4 );
+	for( int y = 0; y < hh; ++y )
+		for( int x = 0; x < hw; ++x )
+		{
+			float* o = &padded[ ( static_cast< size_t >( y ) * hw + x ) * 4 ];
+			if( x < width && y < height )
+				std::memcpy( o, &picture[ ( static_cast< size_t >( y ) * width + x ) * 4 ], 4 * sizeof( float ) );
+			else
+			{
+				o[ 0 ] = 1.0f;
+				o[ 1 ] = 0.0f;
+				o[ 2 ] = 1.0f;
+				o[ 3 ] = 1.0f;
+			}
+		}
+	return makeTexture( hw, hh, padded.data() );
 }
 
 //---------------------------------------------------------------------------
@@ -1264,18 +1288,19 @@ int runBanks( const Perturb& perturb )
 {
 	std::printf( "\n=== banks: walls hold the water's energy and pass no flow; open water lets it go\n" );
 
-	auto energyAfter = [ & ]( Banks banks, double early, double late, double& wallFlux ) {
+	auto energyAfter = [ & ]( Banks banks, double early, double late, double& wallFlux, double pond = 0.5,
+	                          double depth = 0.2, double pebble = 0.03, int cells = 1024 ) {
 		Rig rig;
 		double result = -1.0;
 		if( !rig.Init( 256, 144 ) )
 			return result;
 		rig.Calm();
 		rig.Set( PT_BANKS, static_cast< float >( banks ) );
-		rig.Set( PT_POND_SIZE, pondParam( 0.5 ) );
-		rig.Set( PT_DEPTH, depthParam( 0.2 ) );
+		rig.Set( PT_POND_SIZE, pondParam( pond ) );
+		rig.Set( PT_DEPTH, depthParam( depth ) );
 		rig.Set( PT_VISCOSITY, viscosityParam( 1e-7 ) );
-		rig.Set( PT_DETAIL, detailParam( 1024 ) );
-		rig.Set( PT_PEBBLE_SIZE, pebbleParam( 0.03 ) );
+		rig.Set( PT_DETAIL, detailParam( cells ) );
+		rig.Set( PT_PEBBLE_SIZE, pebbleParam( pebble ) );
 		rig.Set( PT_PEBBLE_X, 0.3f );
 		rig.Set( PT_PEBBLE_Y, 0.4f );
 		rig.Set( PT_CAUSTICS, 0.0f );
@@ -1333,6 +1358,16 @@ int runBanks( const Perturb& perturb )
 	//metre pond several times. Walls keep it (only viscosity at 1e-7 takes
 	//any); open water must have absorbed nearly all of it.
 	Check( open >= 0.0 && open < 0.02, fmt( "Open: frame energy at 10 s is %.4f of its value at 1 s (bound < 0.02)", open ) );
+
+	//The hard case for a sponge: a 20 m pond, 2 m deep, a 10 cm stone. Its
+	//longest waves run at metres a second and are the ones a fixed-strength
+	//sponge let back in. Ninety seconds carries the slowest ripple here
+	//across the frame and out several times over.
+	double bigFlux = 0.0;
+	const double big = energyAfter( perturb.banksSwapped ? Banks::Walls : Banks::Open, 3.0, 90.0, bigFlux, 20.0, 2.0,
+	                                0.1, 256 );
+	Check( big >= 0.0 && big < 0.02,
+	       fmt( "Open, a 20 m pond 2 m deep: frame energy at 90 s is %.4f of its value at 3 s (bound < 0.02)", big ) );
 	Check( walls > 0.5, fmt( "Walls: frame energy at 10 s is %.3f of its value at 1 s (bound > 0.5)", walls ) );
 	//A missing or misplaced image is an O(1) asymmetry. Rounding in 600
 	//frames of transforms is about 1e-5 (measured: 2e-6 after one frame,
@@ -1610,7 +1645,7 @@ int runCaustics( const Perturb& perturb )
 			return 1;
 		rig.Calm();
 		rig.Set( PT_RAIN, 0.7f );
-		rig.Set( PT_SPLASH, 0.8f );
+		rig.Set( PT_RAIN_SIZE, 0.75f );//about 9 mm: big drops, a violent net
 		rig.Set( PT_SUN_ELEVATION, 0.5f );
 		rig.Set( PT_SUN_SIZE, blurred ? 0.6f : 0.0f );
 		rig.Render( 150 );
@@ -1627,8 +1662,19 @@ int runCaustics( const Perturb& perturb )
 		            mean, peak ) );
 	}
 
-	//3. A known surface: a plane wave, sun overhead, no folds. The bed point
-	//x' = x + (h + eta) tan( lean( slope ) ) receives 1 / (dx'/dx) of light.
+	//3. A known surface: a plane wave, no folds, the sun overhead and then
+	//55 degrees up on either side of it (azimuth 0 and 180, in the wave's
+	//plane). The bed point x' where the light entering at x lands, less where
+	//flat water would land it, receives 1 / (dx'/dx) of light. The oblique
+	//suns are what pin the sun's DIRECTION: overhead, and in the mean, a sign
+	//error in it or in the flat-water shift would pass.
+	struct Sun
+	{
+		double elevation, azimuth;
+		const char* name;
+	};
+	for( const Sun sun : { Sun { 90.0, 0.0, "overhead" }, Sun { 55.0, 0.0, "55 deg, azimuth 0" },
+	                       Sun { 55.0, 180.0, "55 deg, azimuth 180" } } )
 	{
 		Grid g;
 		{
@@ -1643,27 +1689,44 @@ int runCaustics( const Perturb& perturb )
 		}
 		PlaneWave wave   = fittedWave( g, g.nx / 48, 0, 0.0 );
 		const double depth = 0.1;
-		//Weak enough not to fold: dx'/dx stays between about 0.6 and 1.4.
-		wave.amplitude = 0.4 / ( depth * ( 1.0 - 1.0 / kWaterIndex ) * wave.kx * wave.kx );
+		//Weak enough not to fold: dx'/dx stays between about 0.6 and 1.4
+		//overhead. An oblique sun leans the refracted light further per unit
+		//of slope, so the same wave focuses near to a fold; it gets a weaker
+		//wave, to test the direction rather than the singularity.
+		const double strength = sun.elevation > 89.0 ? 0.4 : 0.2;
+		wave.amplitude = strength / ( depth * ( 1.0 - 1.0 / kWaterIndex ) * wave.kx * wave.kx );
 
 		Rig rig;
 		if( !frozenPond( rig, 1280, 720, buildCard( 1280, 720 ), wave, depth, 1.0 ) )
 			return 1;
 		rig.Set( PT_CAUSTICS, 0.5f );
-		rig.Set( PT_SUN_ELEVATION, 1.0f );
+		rig.Set( PT_SUN_ELEVATION, static_cast< float >( ( sun.elevation - 10.0 ) / 80.0 ) );
+		rig.Set( PT_SUN_AZIMUTH, static_cast< float >( sun.azimuth / 360.0 ) );
 		rig.Set( PT_SUN_SIZE, 0.0f );
 		rig.Render( 1 );
 		const Floats c = rig.CausticMap();
 		const double W = rig.plugin.FrameWidthMetres();
 
-		//The landing map, from scratch, and its derivative numerically.
-		const double h = depth * perturb.focusDepth;
-		auto landing   = [ & ]( double x ) {
-            const double s         = wave.slopeX( x, 0.0 );
-            const double incidence = std::atan( std::fabs( s ) );
-            const double refracted = std::asin( std::sin( incidence ) / kWaterIndex );
-            const double lean      = std::tan( incidence - refracted ) * ( s > 0 ? 1.0 : -1.0 );
-            return x + ( h + wave.eta( x, 0.0 ) ) * lean;
+		//The landing map, from scratch -- vector Snell in the x-z plane -- and
+		//its derivative numerically.
+		const double h  = depth * perturb.focusDepth;
+		const double e  = sun.elevation * kPi / 180.0, az = sun.azimuth * kPi / 180.0;
+		const double Lx = -std::cos( e ) * std::cos( az ), Lz = -std::sin( e );
+		auto refracted  = [ & ]( double nx, double nz, double& tx, double& tz ) {
+			const double eta = 1.0 / kWaterIndex;
+			const double cosI = -( nx * Lx + nz * Lz );
+			const double k    = 1.0 - eta * eta * ( 1.0 - cosI * cosI );
+			tx                = eta * Lx + ( eta * cosI - std::sqrt( k ) ) * nx;
+			tz                = eta * Lz + ( eta * cosI - std::sqrt( k ) ) * nz;
+		};
+		double t0x, t0z;
+		refracted( 0.0, 1.0, t0x, t0z );
+		const double flat = h * t0x / -t0z;
+		auto landing      = [ & ]( double x ) {
+			const double s = wave.slopeX( x, 0.0 ), norm = std::sqrt( 1.0 + s * s );
+			double tx, tz;
+			refracted( -s / norm, 1.0 / norm, tx, tz );
+			return x + ( h + wave.eta( x, 0.0 ) ) * tx / -tz - flat;
 		};
 
 		//Invert x' -> x by bisection on the monotone map, then 1 / derivative.
@@ -1678,7 +1741,6 @@ int runCaustics( const Perturb& perturb )
 			return 2.0 * e / ( landing( x + e ) - landing( x - e ) );
 		};
 
-		const int row  = 360;
 		//One mesh cell, in metres: the caustic mesh is 1.2 frames across.
 		const double cell = 1.2 * W / std::max( rig.plugin.MeshColumns(), 1 );
 		double worst = 0.0, lo = 10.0, hi = 0.0, bound = 0.0;
@@ -1686,26 +1748,33 @@ int runCaustics( const Perturb& perturb )
 		{
 			const double xb       = ( x + 0.5 ) / 1280.0 * W;
 			const double expected = expectedAt( xb );
-			const double got      = c[ static_cast< size_t >( row ) * 1280 + x ];
-
-			//Each mesh triangle carries its own AVERAGE focus, constant
-			//across it, and a triangle reaches up to 0.8 of a mesh cell from
-			//any point in it once its corners are jittered: so the check
-			//allows how far the exact value moves within 0.8 of a cell of
-			//the pixel. Derived from the expectation, not fitted to the result.
+			//The wave runs along x, so every row should read the same: the
+			//column's mean over 360 rows takes out the luck of which jittered
+			//triangle covers which pixel centre, which is the point of the
+			//jitter. What is left is that each triangle carries its own
+			//AVERAGE focus, and a triangle reaches up to 0.8 of a mesh cell
+			//from any point in it -- so the check allows how far the exact
+			//value moves within 0.8 of a cell. Derived from the expectation,
+			//not fitted to the result.
+			double got = 0.0;
+			for( int y = 180; y < 540; ++y )
+				got += c[ static_cast< size_t >( y ) * 1280 + x ];
+			got /= 360.0;
 			const double spread = std::max( std::fabs( expectedAt( xb + 0.8 * cell ) - expected ),
 			                                std::fabs( expectedAt( xb - 0.8 * cell ) - expected ) );
 			const double allow  = spread + 0.01;
 			if( std::fabs( got - expected ) > allow )
+			{
 				worst = std::max( worst, std::fabs( got - expected ) - allow );
+			}
 			bound = std::max( bound, allow );
 			lo    = std::min( lo, got );
 			hi    = std::max( hi, got );
 		}
-		Check( worst == 0.0 && hi > 1.25 && lo < 0.8,
-		       fmt( "plane wave: light from %.3f to %.3f, every pixel within 0.8 of a mesh cell's variation + 0.01 of "
+		Check( worst == 0.0 && hi > 1.15 && lo < 0.85,
+		       fmt( "plane wave, sun %s: light from %.3f to %.3f, every column (mean of 360 rows) within 0.8 of a mesh cell's variation + 0.01 of "
 		            "1/(dx'/dx) (largest allowance %.3f, worst excess %.4f)",
-		            lo, hi, bound, worst ) );
+		            sun.name, lo, hi, bound, worst ) );
 	}
 
 	return Verdict();
@@ -1727,8 +1796,10 @@ int runStill( const Perturb& perturb )
 			return 1;
 		rig.Calm();
 		rig.Set( PT_REFLECTION, reflecting ? 1.0f / 3.0f : 0.0f );
-		//Ten seconds of water with nothing in it: the whole chain runs every
-		//frame, and a round trip that did not return zero would show here.
+		//Ten seconds of water with nothing in it, the whole chain running
+		//every frame. This checks the composite on flat water; it cannot
+		//check the transforms, which map zero to zero whatever they do --
+		//--fft is the check of those.
 		rig.Render( 600 );
 		const Floats out = rig.Output();
 
@@ -1746,6 +1817,41 @@ int runStill( const Perturb& perturb )
 		Check( worst < 1e-5, fmt( "%s: output = %s to within %.1e (bound 1e-5)",
 		                          reflecting ? "Reflection 1" : "Reflection 0",
 		                          reflecting ? "(1 - R0) picture + R0 sky, R0 = 0.02037" : "the picture", worst ) );
+	}
+
+	//A host texture bigger than its picture: 960x540 in the corner of a
+	//1024x1024 texture padded with magenta. Still water must still be the
+	//picture, and water full of rain must never show the padding.
+	for( int raining = 0; raining < 2; ++raining )
+	{
+		const int w = 960, h = 540;
+		const Floats card = buildCard( w, h );
+		Rig rig;
+		if( !rig.Init( w, h, &card ) )
+			return 1;
+		rig.Calm();
+		rig.Set( PT_REFLECTION, 0.0f );
+		if( raining )
+			rig.Set( PT_RAIN, 0.7f );
+		const GLuint padded = paddedTexture( card, w, h, 1024, 1024 );
+		rig.inputStruct.Handle         = padded;
+		rig.inputStruct.HardwareWidth  = 1024;
+		rig.inputStruct.HardwareHeight = 1024;
+		rig.Render( raining ? 120 : 5 );
+		const Floats out = rig.Output();
+		double worst = 0.0;
+		int magenta  = 0;
+		for( size_t i = 0; i < out.size(); i += 4 )
+		{
+			for( int c = 0; c < 3; ++c )
+				worst = std::max( worst, static_cast< double >( std::fabs( out[ i + c ] - card[ i + c ] ) ) );
+			magenta += out[ i ] > 0.9f && out[ i + 1 ] < 0.25f && out[ i + 2 ] > 0.9f;
+		}
+		glDeleteTextures( 1, &padded );
+		if( raining )
+			Check( magenta == 0, fmt( "padded host texture, heavy rain: %d pixels of the padding show (the card has none)", magenta ) );
+		else
+			Check( worst < 1e-5, fmt( "padded host texture (960x540 in 1024x1024), still water: the picture to within %.1e", worst ) );
 	}
 
 	return Verdict();
@@ -1802,6 +1908,35 @@ int runSkim( const Perturb& perturb )
 
 	const bool sinkBiggest = !log.empty() && log.back().radius > log.front().radius;
 	Check( sinkBiggest, "the last impact is the sink: the whole stone, larger than a touch" );
+
+	//A throw hard enough to cross the pond: the stone stops at the far bank.
+	//The grid is periodic, so a touch past it would wrap round and splash
+	//back into the frame somewhere unrelated.
+	{
+		Rig hard;
+		if( !hard.Init( 160, 90 ) )
+			return 1;
+		hard.Calm();
+		hard.Set( PT_DETAIL, detailParam( 256 ) );
+		hard.Set( PT_CAUSTICS, 0.0f );
+		hard.Set( PT_THROW_SPEED, 0.8f );
+		hard.Set( PT_BOUNCES, 1.0f );
+		hard.plugin.KeepInjectedLog( true );
+		hard.Render( 1 );
+		hard.Press( PT_SKIM );
+		hard.Render( 600 );
+		const std::vector< Impact >& touches = hard.plugin.InjectedForTest();
+		const double W = hard.plugin.FrameWidthMetres(), H = hard.plugin.FrameHeightMetres();
+		int outside = 0;
+		for( const Impact& t : touches )
+			outside += t.x < -t.radius || t.x > W + t.radius || t.y < -t.radius || t.y > H + t.radius;
+		//At this speed the first hop alone is longer than the pond, so the
+		//stone touches once and is gone; the claim is that nothing lands
+		//past the bank, where the periodic grid would bring it back in.
+		Check( outside == 0 && !touches.empty(),
+		       fmt( "a %.1f m/s throw over a %.1f m pond: %zu touch%s before the far bank, %d past it", ThrowSpeedFromParam( 0.8f ),
+		            W, touches.size(), touches.size() == 1 ? "" : "es", outside ) );
+	}
 
 	return Verdict();
 }
@@ -1875,6 +2010,90 @@ int runAudio( const Perturb& perturb )
 
 	return Verdict();
 }
+
+//===========================================================================
+// --state
+//===========================================================================
+int runState( const Perturb& )
+{
+	std::printf( "\n=== state: what the host hands over is what it gets back\n" );
+
+	//A host-like context: a vertex array of its own bound, blending on with
+	//its own function, a clear colour, a scissor box, texture unit 3 active --
+	//none of which the plugin has any business keeping.
+	Rig rig;
+	if( !rig.Init( 320, 180 ) )
+		return 1;
+	GLuint hostArray = 0;
+	glGenVertexArrays( 1, &hostArray );
+	int problems = 0;
+	std::string what;
+
+	for( int frame = 0; frame < 3; ++frame )
+	{
+		glBindFramebuffer( GL_FRAMEBUFFER, rig.outputFBO );
+		glViewport( 7, 5, 300, 170 );
+		glBindVertexArray( hostArray );
+		glEnable( GL_BLEND );
+		glBlendFuncSeparate( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO );
+		glClearColor( 0.2f, 0.3f, 0.4f, 0.5f );
+		glEnable( GL_SCISSOR_TEST );
+		glScissor( 0, 0, 320, 180 );
+		glActiveTexture( GL_TEXTURE3 );
+		glActiveTexture( GL_TEXTURE0 );
+		glUseProgram( 0 );
+
+		rig.plugin.SetTime( frame / 60.0 );
+		if( rig.plugin.ProcessOpenGL( &rig.process ) != FF_SUCCESS )
+			return 1;
+
+		GLint viewport[ 4 ] = {}, array = 0, program = 0, unit = 0, fbo = 0, src = 0, dst = 0;
+		GLfloat clear[ 4 ] = {};
+		glGetIntegerv( GL_VIEWPORT, viewport );
+		glGetIntegerv( GL_VERTEX_ARRAY_BINDING, &array );
+		glGetIntegerv( GL_CURRENT_PROGRAM, &program );
+		glGetIntegerv( GL_ACTIVE_TEXTURE, &unit );
+		glGetIntegerv( GL_FRAMEBUFFER_BINDING, &fbo );
+		glGetIntegerv( GL_BLEND_SRC_RGB, &src );
+		glGetIntegerv( GL_BLEND_DST_RGB, &dst );
+		glGetFloatv( GL_COLOR_CLEAR_VALUE, clear );
+
+		auto expect = [ & ]( bool ok, const char* name ) {
+			if( !ok )
+			{
+				++problems;
+				what += std::string( " " ) + name;
+			}
+		};
+		expect( viewport[ 0 ] == 7 && viewport[ 1 ] == 5 && viewport[ 2 ] == 300 && viewport[ 3 ] == 170, "viewport" );
+		expect( array == static_cast< GLint >( hostArray ), "vertex-array" );
+		expect( program == 0, "program" );
+		expect( unit == GL_TEXTURE0, "active-unit" );
+		expect( fbo == static_cast< GLint >( rig.outputFBO ), "framebuffer" );
+		expect( glIsEnabled( GL_BLEND ) && src == GL_SRC_ALPHA && dst == GL_ONE_MINUS_SRC_ALPHA, "blend" );
+		expect( glIsEnabled( GL_SCISSOR_TEST ), "scissor" );
+		expect( clear[ 0 ] == 0.2f && clear[ 1 ] == 0.3f && clear[ 2 ] == 0.4f && clear[ 3 ] == 0.5f, "clear-colour" );
+		for( int u = 0; u < 8; ++u )
+		{
+			GLint bound = 0;
+			glActiveTexture( static_cast< GLenum >( GL_TEXTURE0 + u ) );
+			glGetIntegerv( GL_TEXTURE_BINDING_2D, &bound );
+			expect( bound == 0, "texture-unit" );
+		}
+		glActiveTexture( GL_TEXTURE0 );
+	}
+
+	glDisable( GL_SCISSOR_TEST );
+	glDisable( GL_BLEND );
+	glBindVertexArray( 0 );
+	glDeleteVertexArrays( 1, &hostArray );
+
+	Check( problems == 0, fmt( "three frames: viewport, vertex array, program, active unit, framebuffer, blend, scissor, "
+	                           "clear colour and eight texture units all as the host left them (%d wrong:%s)",
+	                           problems, what.empty() ? " none" : what.c_str() ) );
+	return Verdict();
+}
+
 
 //===========================================================================
 // --negative
@@ -2091,6 +2310,7 @@ bool applySetting( MillpondPlugin& plugin, const std::string& assignment, std::s
 	error = "no parameter called '" + name + "'";
 	return false;
 }
+
 //---------------------------------------------------------------------------
 // --script: one 'frame Parameter Name value' per line. Same format as the
 // rest of the fleet, so one filming script drives any of them.
@@ -2315,7 +2535,7 @@ int main( int argc, char** argv )
 				"  --film N          N frames of the card, raw RGBA frames on stdout\n"
 				"  --script PATH     parameter cues for --pipe/--film: 'frame Name value'\n\n"
 				"  --fft --modes --gravity --quiet --shallow --banks --refraction --fresnel\n"
-				"  --caustics --still --skim-check --rain --audio --negative --bench\n" );
+				"  --caustics --still --skim-check --rain --audio --state --negative --bench\n" );
 			return 0;
 		}
 		else if( argument == "--out" && hasNext )
@@ -2352,7 +2572,8 @@ int main( int argc, char** argv )
 		else if( argument == "--fft" || argument == "--modes" || argument == "--gravity" || argument == "--quiet"
 		         || argument == "--shallow" || argument == "--banks" || argument == "--refraction"
 		         || argument == "--fresnel" || argument == "--caustics" || argument == "--still"
-		         || argument == "--rain" || argument == "--audio" || argument == "--negative" || argument == "--bench" )
+		         || argument == "--rain" || argument == "--audio" || argument == "--negative" || argument == "--bench"
+		         || argument == "--state" )
 			mode = argument.substr( 2 );
 		else if( argument == "--size" && hasNext )
 		{
@@ -2407,7 +2628,7 @@ int main( int argc, char** argv )
 		{ "quiet", runQuiet },     { "shallow", runShallow },   { "banks", runBanks },
 		{ "refraction", runRefraction }, { "fresnel", runFresnel }, { "caustics", runCaustics },
 		{ "still", runStill },     { "skim", runSkim },         { "rain", runRain },
-		{ "audio", runAudio },
+		{ "audio", runAudio },       { "state", runState },
 	};
 
 	bool ran = false;

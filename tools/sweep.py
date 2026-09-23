@@ -18,8 +18,7 @@ exactly that and nothing more, as raw harness arguments -- `--drop 20` presses
 Drop on frame 20, `--skim 20` throws a stone, `--beat` feeds a beat every half
 second into the Audio buffer. An entry whose absence changes nothing is worse
 than no entry: it makes the sweep look more careful than it is, so the table
-was checked by emptying it -- all ten go dead without it, and Splash, which is
-not in it, stays live because the rain splashes too.
+was checked by emptying it: all eleven go dead without it.
 
 Everything else is live on the base render, which is the plugin's own defaults
 plus a harder rain -- ripples everywhere, so the light, the banks, the depth
@@ -52,6 +51,7 @@ CONTEXT = {
     "Pebble X": DROP,
     "Pebble Y": DROP,
     "Pebble Size": DROP,
+    "Splash": DROP,
     "Scatter": DROP,
     "Heading": SKIM,
     "Throw Speed": SKIM,

@@ -193,6 +193,39 @@ press keyed without the key before it ramps up and crosses 0.5 halfway there.
 The first reel's skim fired on frame 0, before anyone was watching. A press is
 three keys.
 
+**Three texture units cannot be unwound by the scoped bindings.** An
+independent review found this. Every `Scoped2DTextureBinding` clears to 0 on
+whichever unit is active when it exits, and every `ScopedSamplerActivation`
+sets unit 0 on exit. Unwinding three interleaved pairs therefore clears unit
+2, sets unit 0, and then "clears unit 1" on unit 0. The composite (three
+units) left the surface texture bound on unit 1 in the host's context every
+frame. Two pairs happen to unwind correctly, so the FFT's pattern looked
+safe. `releaseTextureUnits( 3 )` after the draw fixes it. `--state` would
+have caught it; checked by removing the fix.
+
+**The host's clear colour is state too.** Our passes clear with their own and
+`SavedGLState` did not put it back. The harness could not see it, because it
+sets its own before every frame. Depth test, culling and scissor are now also
+forced off for our passes and restored: a host that left any of them on would
+reject overlapping caustic triangles, drop the folded ones, or clip a pass.
+
+**The grid is periodic, so anything past the frame comes back in.** A skim
+hard enough to cross the pond kept touching past the far bank, and those
+touches wrapped round into the frame at random. With Walls, every one also
+mirrored into the pool. The stone now stops at the bank, and scattered
+pebbles are clamped into the frame.
+
+**The clock-unit vote settles with a jump.** Wall time since the first frame
+becomes host time, which can be hours in. The frame that settled the vote
+advanced the water by the whole 0.25 s clamp: a lurch and a burst of rain. The
+settling frame now takes no time.
+
+**The sponge is sized from the fastest wave the pond holds.** A wave crossing
+the margin loses Rate × margin / (3v) e-foldings, so a fixed rate protects
+slow ripples well and a big deep pond's long waves hardly at all. The review
+had it right and my README had it backwards: the weak case is the LARGEST
+ponds. The rate now gives the fastest wave six e-foldings on the way in.
+
 **`getenv` debug switches.** Several were added to the harness while hunting
 the above and are all gone again. If you add more, grep for `getenv` before
 you commit.
@@ -214,7 +247,8 @@ Asked of each: would it still hold on another rasteriser, at another raster?
 | `--fresnel` | 1e-3 absolute | dR/dslope ≤ 0.1 times the interpolation error in slope; a wrong index moves R by 1e-2 |
 | `--caustics` still | 1e-6 | division as reciprocal × multiply |
 | `--caustics` rain | mean 1 ± 0.005 | edge crossings (balanced) plus coverage luck (unbiased, jittered); measured ≤ 0.1% |
-| `--caustics` plane | exact variation over ±0.8 mesh cell + 0.01 | a triangle carries its mean focus and reaches 0.8 cell once jittered |
+| `--caustics` plane | exact variation over ±0.8 mesh cell + 0.01, on each column's mean over 360 rows | a triangle carries its mean focus and reaches 0.8 cell once jittered; the row mean takes out which triangle covers which pixel, and the oblique suns failed per pixel on exactly that luck |
+| `--state` | exact | every piece of GL state a host could care about, after three frames |
 | `--still` | 1e-5 | float; one 8-bit code value is 4e-3 |
 | `--skim-check` | 1e-5 m, 1e-4 rad | positions stored as float metres |
 | `--rain` | 4√N | Poisson; a false alarm one run in 16,000 |

@@ -223,6 +223,9 @@ constexpr float kGravity = 9.81f;
 /// Clean water's surface tension over density, m^3/s^2.
 constexpr float kWaterTension = 7.28e-5f;
 
+/// A raindrop's crater depth as a fraction of its radius.
+constexpr float kRainSplash = 0.3f;
+
 /// Water's refractive index.
 constexpr float kWaterIndex = 1.333f;
 
