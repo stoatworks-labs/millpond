@@ -28,6 +28,45 @@ right), the rings of a pebble dropped a second and a half earlier, and a light
 rain. The picture under the water is the harness's own card. Rendered by the
 plugin's offline harness (`mptest`), not captured from Resolume.</sub>
 
+[![Millpond — real water ripples as an effect, for Resolume](docs/video-thumb.png)](https://www.youtube.com/watch?v=oAbXjVXFwYA)
+
+*[Watch it](https://www.youtube.com/watch?v=oAbXjVXFwYA) — 52 seconds: one pebble and the still water it leaves, two pebbles whose rings cross,
+two skimmed stones, a walled pond throwing its waves back, and rain with the
+sunlight bent through it. Every frame is the real plugin's output, rendered by its
+offline harness from Resolume's own demo clips rather than captured from Resolume.*
+
+<!-- downloads:start -->
+
+## Download
+
+**[v0.1.0](https://github.com/stoatworks-labs/millpond/releases/tag/v0.1.0)** — prebuilt for macOS and Windows. Pick your platform:
+
+<details>
+<summary><b>macOS</b> — Universal (Apple Silicon + Intel)</summary>
+
+| Build | Download | Size |
+| --- | --- | --- |
+| Universal (Apple Silicon + Intel) · .dmg disk image | [`millpond-0.1.0-macos-universal.dmg`](https://github.com/stoatworks-labs/millpond/releases/download/v0.1.0/millpond-0.1.0-macos-universal.dmg) | 254 KB |
+| Universal (Apple Silicon + Intel) · .zip archive | [`millpond-macos-universal.zip`](https://github.com/stoatworks-labs/millpond/releases/latest/download/millpond-macos-universal.zip) | 214 KB |
+
+</details>
+
+<details>
+<summary><b>Windows</b> — x64</summary>
+
+| Build | Download | Size |
+| --- | --- | --- |
+| x64 · .exe installer | [`millpond-0.1.0-windows-x86_64-setup.exe`](https://github.com/stoatworks-labs/millpond/releases/download/v0.1.0/millpond-0.1.0-windows-x86_64-setup.exe) | 233 KB |
+| x64 · .zip archive | [`millpond-windows-x86_64.zip`](https://github.com/stoatworks-labs/millpond/releases/latest/download/millpond-windows-x86_64.zip) | 126 KB |
+
+</details>
+
+All builds, checksums and release notes: [github.com/stoatworks-labs/millpond/releases](https://github.com/stoatworks-labs/millpond/releases).
+
+macOS builds are signed and notarised and open normally. The Windows builds are unsigned, so SmartScreen warns once.
+
+<!-- downloads:end -->
+
 ## The one idea
 
 **The water obeys the linear water-wave equations, exactly, and the light
