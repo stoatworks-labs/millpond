@@ -67,8 +67,9 @@ returns exactly the computed points.
   x = 0, so by periodicity it is even about x = W as well. That is a
   reflecting rectangular basin to every order: a DCT built out of an FFT.
 - **Open:** no images. The three non-frame quadrants are a sponge,
-  exp(−σ r² Δt), quadratic in the distance into the margin, with σ = 9/margin
-  (in metres). Because the domain wraps, the frame is surrounded by margin on
+  exp(−σ r² Δt), quadratic in the distance into the margin, with σ sized to
+  give the fastest wave the pond holds six e-foldings on the way in (see the
+  traps). Because the domain wraps, the frame is surrounded by margin on
   all four sides.
 
 Changing Banks or Detail resets the pond. A walled pond carrying an open
@@ -133,8 +134,9 @@ corners are jittered by up to 0.3 cell with an integer hash. The outer ring of
 corners stays fixed, and shared corners jitter identically, so the mesh stays
 watertight. Now every raster and Detail tried is within 0.1%. An axis-aligned
 plane wave is the worst case even so, because every row is the same row;
-`--caustics` measures its focus pointwise with an allowance derived from the
-triangle size, not its mean.
+`--caustics` compares each column's mean over 360 rows (the row mean takes out
+which jittered triangle covers which pixel), with an allowance derived from
+the triangle size.
 
 **GPUs divide as reciprocal × multiply, and this one stores half floats by
 truncating.** Still water's area over itself came out 0.99999994. In R16F that
