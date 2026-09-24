@@ -190,7 +190,7 @@ on its own, so a pass there says less than it would for a still picture.
 is known about performance on Windows, and it has never been loaded into
 Arena on macOS. Offline, `oxbow probe` reads the bundle the way a host does,
 and `oxbow selftest` instantiates it through the host's own path. There is no
-OpenFX port, no browser demo and no factory presets. Everything below was
+OpenFX port and no factory presets. Everything below was
 built and measured on macOS (Apple Silicon, M4 Max).
 
 What is measured, on this machine:
@@ -237,6 +237,15 @@ What is **not** verified, and is the honest limit of this release:
   fastest wave the pond can hold, on the way in alone, and more out of every
   slower one. `--banks` measures it on a half-metre pond; nothing has measured
   the reflection of a sponge that strong on the shortest ripples.
+
+**Browser demo:** [millpond-demo.stoatworks-labs.com](https://millpond-demo.stoatworks-labs.com)
+runs the plugin's eight shaders — the FFT, the exact propagator, the caustic
+mesh and the composite — ported to WebGL2, and `demo/tools/check_shaders.py`
+holds that GLSL character-for-character against `source/Shaders.cpp`
+(`tools/verify.sh` runs it). The CPU half — the controls, the skim schedule, the
+PCG rain, the grid and the frame sequence — is a hand translation to JavaScript
+that nothing checks but a reader. Drop, Skim and Still are buttons there; the
+audio controls are absent.
 
 ## Build
 

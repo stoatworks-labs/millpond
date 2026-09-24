@@ -327,3 +327,61 @@ Assumed, or not yet done:
   been tried; `verify.sh` is ~80 s here, and the sweep and `--negative` are
   the slow parts to gate if it crawls.
 - Linear theory only; see the README's Status.
+
+## The browser demo
+
+`demo/` is the page at **millpond-demo.stoatworks-labs.com**, built on the shared kit in `infrastructure/stoatworks-backend/resolume-demo/`, vendored into `demo/vendor/` by its `sync.sh` — fix a kit bug THERE, never here. There is no build step: `cf-run npx wrangler deploy` from the repo root uploads `demo/` as it stands, and the page is verified by content (its `<title>`), never by status code.
+
+**What is the plugin's own code.** All eight shaders — `kVertexShader`,
+`kInjectShader`, `kFFTShader`, `kEvolveShader`, `kCausticVertexShader`,
+`kCausticFragmentShader`, `kBlurShader`, `kCompositeShader` — copied into
+`demo/plugin.js` character for character. `demo/tools/check_shaders.py`
+compares them and `tools/verify.sh` runs it as its "Demo shaders" step. So the
+water on the page is this water: an FFT of the surface every frame, each mode
+advanced exactly, and back.
+
+**What is a port, checked by a reader and nothing else.** `Controls.cpp`, the
+CPU half of `Physics.cpp` (`Omega`, `GroupVelocity`, `SkimSchedule`,
+`SkimStart`, `Random` with its Poisson draw, `ChooseGrid`), `CollectImpacts`,
+`Simulate`, `Transform`, `Caustics`, `MakeTwiddles` and the frame sequence of
+`ProcessOpenGL`. Cross-checked by hand once, on 2026-09-24, and nothing re-runs
+it: `Random` (PCG-XSH-RR on a BigInt state) gives the C++'s first four draws
+bit for bit and the same total over 1000 Poisson draws at a mean of 0.37 (334);
+an 11-touch skim schedule agrees to float rounding (1e-8); `ChooseGrid` gives
+the same 1024 x 512 grid; `GroupVelocity` agrees to 5e-8 relative, the residue
+being the water constants rounded to float in the C++. To redo it, slice the
+block from `Controls.h / Controls.cpp, ported` to `The plugin's frame` out of
+`plugin.js` into a `new Function` under node, and print the same values from a
+one-file C++ program built against `source/Physics.cpp` and
+`source/Controls.cpp`.
+
+### The decisions, and why
+
+- **Drop, Skim and Still are booleans the renderer releases**, readout's Fire
+  precedent. The kit has no event type; each button is taken and set back to
+  Off on the frame it acts, which is what a host does with an event parameter
+  and why it blinks. That is also the answer to the Arena gate's blind spot:
+  here a visitor presses them. A `?drop=1` in the URL fires one pebble on load,
+  which is how the page was verified headlessly.
+- **Audio, Audio Pebbles and Audio Rain are absent, not dead.** With no spectrum
+  the plugin's analyser never fires and reports a level of 0, so the page drops
+  exactly the pebbles and rain the plugin would.
+- **Three float extensions, and each one's absence throws.**
+  `EXT_color_buffer_float` (RG32F spectrum, RGBA32F surface, R32F caustics),
+  `EXT_float_blend` (the caustic mesh adds into R32F) and
+  `OES_texture_float_linear` (the surface and the caustics are read LINEAR;
+  without it WebGL2 samples them as black, which would show a still pond rather
+  than an error).
+- **The surface wraps.** The kit's `PassBuffer` clamps; the plugin allocates the
+  surface with `Wrap::Repeat` because the domain is periodic, so the page sets
+  REPEAT itself after each `ensure()`.
+- **The clock is the page's, in seconds**, so the unit vote has nothing to do;
+  the quarter-second clamp per frame is kept. **Restart stills the water**, which
+  the plugin has no control for.
+- **Detail stays at the plugin's default, 1024.** A real GPU runs it in the
+  browser without trouble. Headless Chrome on SwiftShader cannot: the default
+  caustic mesh is about 1.1 million vertices, and `cdpshot.py`'s CDP call timed
+  out behind it — verify headlessly at `detail=0&caustics=0`.
+- **The default clip is the geometry card**: water hides on a busy clip (the
+  plugin's own video uses only calm ones), and straight lines show every bend.
+- **The About block is absent**; its links are in the page header.

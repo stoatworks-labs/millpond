@@ -160,6 +160,28 @@ step "Shaders"
 shaders_compile || fail "a shader does not compile"
 
 #---------------------------------------------------------------------------
+step "Demo shaders"
+#---------------------------------------------------------------------------
+# The browser demo's copy of the same GLSL.
+#
+# `demo/plugin.js` cannot include a C++ file, so it carries its own copy of
+# every shader. This compares the two character for character -- reformatting
+# counts, deliberately, because "it is only whitespace" is how a real change
+# gets waved through. It says nothing about the demo's PORT of the CPU half;
+# only a reader can check that.
+#---------------------------------------------------------------------------
+if [[ -f demo/tools/check_shaders.py ]]; then
+	if python3 demo/tools/check_shaders.py >/tmp/millpond-demo-shaders.log 2>&1; then
+		echo "ok   $( tail -1 /tmp/millpond-demo-shaders.log )"
+	else
+		tail -12 /tmp/millpond-demo-shaders.log
+		fail "the demo's shaders have drifted -- see /tmp/millpond-demo-shaders.log"
+	fi
+else
+	echo "   skipped: no demo/"
+fi
+
+#---------------------------------------------------------------------------
 step "Submodule"
 #---------------------------------------------------------------------------
 if [[ ! -f external/ffgl/CMakeLists.txt ]]; then
