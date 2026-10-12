@@ -167,8 +167,8 @@ MSVC 2022 and vcpkg's `x64-windows-static-md`. In Arena:
 
 - it loaded, and was registered and listed as `SW Millpond` / `MP01`, an
   effect;
-- all 40 controls came back with the declared name, order, type, range and
-  default;
+- all 40 controls (Arena's own Opacity included) came back with the declared
+  name, order, type, range and default;
 - the shaders compiled and it rendered. The plugin's own log recorded
   `GL vendor=Mesa … 4.5 (Core Profile)` and `initialised`, and it read
   Arena's clock as milliseconds;
