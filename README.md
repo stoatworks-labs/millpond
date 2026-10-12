@@ -1,39 +1,33 @@
 # millpond
 
 > **AI-assisted project.** This codebase was created with [Claude](https://claude.com/claude-code)
-> (Anthropic), directed and reviewed by a human author. It has **never been
+> (Anthropic), directed and reviewed by a human author. It's **never been
 > loaded into Resolume**. Everything below is measured by an offline harness
-> that drives the real plugin class in a headless GL context. The central
-> claims are measured, not asserted. `mptest --gravity` and `--quiet` compare
-> the plugin's water, at every grid point, with the exact Cauchy–Poisson
-> integral for the same crater, evaluated in double precision (they agree to
-> **0.01%**). `--quiet` also finds the still disc inside the ring and the Airy
-> edge of it where the dispersion relation puts them. `--refraction` checks
-> the bed's displacement against Snell's law at two rasters, and `--fresnel`
-> checks the reflection against the exact Fresnel reflectance. `--caustics`
-> requires the caustic net to conserve light and to focus it by the landing
-> map's Jacobian. `mptest --negative` re-runs every check against a
-> deliberately wrong model and fails if any of them *passes* (see
-> [Status](#status)). A control sweep fails if any parameter turns out to do
-> nothing.
+> that drives the plugin's own class in a headless GL context: the water against
+> the exact Cauchy–Poisson integral, evaluated in double precision (they agree to
+> **0.01%**), and the light against Snell and Fresnel, with every check also run
+> against a wrong model to show it can fail. The full rundown is under
+> [Status](#status).
 
-Ripples for Resolume Arena/Avenue, as an FFGL effect. Drop a pebble, skim a
-stone, let it rain. The clip becomes the bed of a pond, and you look down at it
-through the water.
+Ripples for Resolume Arena and Avenue, as an FFGL effect. Drop a pebble, skim a
+stone or let it rain. The clip becomes the bed of a pond, and you look down at it
+through the water. It's the only water feature a venue will happily let you put
+on stage.
 
 ![A pond bed of stones seen through rippled water: a skimmed stone's line of rings across the lower left, a pebble's rings, rain, and a net of sunlight on the bed](docs/hero.png)
 
 <sub>A skim across the lower left (its hops shorten towards the sink on the
 right), the rings of a pebble dropped a second and a half earlier, and a light
 rain. The picture under the water is the harness's own card. Rendered by the
-plugin's offline harness (`mptest`), not captured from Resolume.</sub>
+plugin's offline harness (`mptest`) rather than captured from Resolume.</sub>
 
 [![Millpond — real water ripples as an effect, for Resolume](docs/video-thumb.png)](https://www.youtube.com/watch?v=oAbXjVXFwYA)
 
-*[Watch it](https://www.youtube.com/watch?v=oAbXjVXFwYA) — 52 seconds: one pebble and the still water it leaves, two pebbles whose rings cross,
-two skimmed stones, a walled pond throwing its waves back, and rain with the
-sunlight bent through it. Every frame is the real plugin's output, rendered by its
-offline harness from Resolume's own demo clips rather than captured from Resolume.*
+*[Watch it](https://www.youtube.com/watch?v=oAbXjVXFwYA) (52 seconds): one pebble and the still
+water it leaves, two pebbles whose rings cross, two skimmed stones, a walled pond throwing its
+waves back, and rain with the sunlight bent through it. It's all the plugin's own output,
+rendered by its offline harness from Resolume's own demo clips rather than captured from
+Resolume.*
 
 <!-- downloads:start -->
 
@@ -70,7 +64,7 @@ macOS builds are signed and notarised and open normally. The Windows builds are 
 ## The one idea
 
 **The water obeys the linear water-wave equations, exactly, and the light
-obeys Snell and Fresnel.** Nothing is drawn. A pebble is a crater pushed into
+obeys Snell and Fresnel.** Nothing is drawn on. A pebble is a crater pushed into
 the surface. From then on every wavelength travels at the speed the dispersion
 relation gives it,
 
@@ -79,10 +73,10 @@ relation gives it,
 (gravity, surface tension and depth), and dies away at the rate viscosity
 gives it. Every frame the surface goes through a Fourier transform on the GPU
 and each wave is advanced by exactly the right phase for the time that has
-passed. There is no time step to go unstable and no numerical dispersion: the
+passed. There's no time step to go unstable and no numerical dispersion: the
 dispersion is the formula.
 
-What falls out of that, rather than being arranged:
+What falls out of that, without anyone arranging it:
 
 - **The still disc inside the ring.** Surface tension gives water a slowest
   speed at which a ripple can carry energy: 17.8 cm/s, at a wavelength of
@@ -97,7 +91,7 @@ What falls out of that, rather than being arranged:
 - **The picture wobbles by exactly as much as it should.** The view ray bends
   at the surface (n = 1.333) and lands on the bed a depth below.
 - **The caustic net on the bed.** Sunlight refracted through the same surface
-  bunches into bright lines where the water focuses it. It is splatted as a
+  bunches into bright lines where the water focuses it. It's splatted as a
   mesh whose triangles each carry their own light, so the total is conserved
   however violent the net gets. The sun's size blurs it by depth × tan(radius),
   so deep water and a hazy sky wash it out.
@@ -106,7 +100,7 @@ What falls out of that, rather than being arranged:
   the sun at the camera, you get the sun.
 
 **The same Depth drives both halves.** A shallow pond both bends the picture
-less and slows its long waves. It is one depth, so it is one control.
+less and slows its long waves. It's one depth, so it's one control.
 
 ![The height of the water a few seconds after one pebble: a ring with a still disc inside it](docs/ring-height.png)
 
@@ -163,9 +157,9 @@ need a high sun, and the default is 85°.
 
 ## Status
 
-**v0.1.0, 2026-09-23, and honestly early.**
+**v0.1.0, 2026-09-23, and still early days.**
 
-It has been loaded into **Resolume Arena 7.27.1 on Windows only, and only on
+It's been loaded into **Resolume Arena 7.27.1 on Windows only, and only on
 a software rasteriser**. The machine is win-lab, an x64 Windows 11 VM with
 no GPU, where OpenGL is Mesa llvmpipe 26.2.0. The DLL was built there with
 MSVC 2022 and vcpkg's `x64-windows-static-md`. In Arena:
@@ -182,18 +176,18 @@ MSVC 2022 and vcpkg's `x64-windows-static-md`. In Arena:
 That sweep reported five controls as having no effect: Surface Tension,
 Banks, Pebble Size, Heading and Throw Speed. Each one shapes the next pebble
 or skim, or acts on waves that reach the bank. The probe never presses Drop
-or Skim, so it cannot see them. The harness here measures all five live. The
+or Skim, so it can't see them. The harness here measures all five live. The
 rest of the controls moved the picture, but the rain keeps the water moving
 on its own, so a pass there says less than it would for a still picture.
 
 `oxbow selftest` on the same VM rendered 120 frames with no GL error. Nothing
-is known about performance on Windows, and it has never been loaded into
-Arena on macOS. Offline, `oxbow probe` reads the bundle the way a host does,
-and `oxbow selftest` instantiates it through the host's own path. There is no
-OpenFX port and no factory presets. Everything below was
-built and measured on macOS (Apple Silicon, M4 Max).
+is known about performance on Windows, and it's never been loaded into Arena on
+macOS. Offline, `oxbow probe` reads the bundle the way a host does, and
+`oxbow selftest` instantiates it through the host's own path. There's no OpenFX
+port and there are no factory presets. Everything below was built and measured
+on macOS (Apple Silicon, M4 Max).
 
-What is measured, on this machine:
+What's measured, on this Mac:
 
 | | |
 | --- | --- |
@@ -219,19 +213,19 @@ Render cost (`mptest --bench`, busy rain): **0.9 ms/frame at 720p, 1.0 at
 1080p, 2.4 at 4K** at the default Detail. Detail sets the grid, not the
 raster, so the 1080p frame costs 0.85 ms at Detail 512 and 4.4 ms at 2048.
 
-What is **not** verified, and is the honest limit of this release:
+What **isn't** verified yet:
 
 - **Linear theory.** The craters are deeper than linear theory strictly
   covers (Splash defaults to half the radius), and the water responds
   linearly anyway. No breaking, no crown splash, no Worthington jet, and no
   bumps where two big waves cross.
 - **Viscous damping is Lamb's weak-damping rate** (2νk²), applied as a damped
-  oscillator. That is exact for water and only a model for syrup, where real
+  oscillator. That's exact for water and only a model for syrup, where real
   creeping flow changes the dispersion too.
 - **The camera looks straight down**, so there is no perspective and no
   horizon, and the sky it reflects is one colour.
 - **Events land on frames.** A pebble goes into the frame in which its time
-  falls, up to one frame early. At 60 fps that is 17 ms, a tenth of a skim's
+  falls, up to one frame early. At 60 fps that's 17 ms, a tenth of a skim's
   quickest hop.
 - **The Open banks' sponge** is tuned to take six e-foldings out of the
   fastest wave the pond can hold, on the way in alone, and more out of every
@@ -239,12 +233,12 @@ What is **not** verified, and is the honest limit of this release:
   the reflection of a sponge that strong on the shortest ripples.
 
 **Browser demo:** [millpond-demo.stoatworks-labs.com](https://millpond-demo.stoatworks-labs.com)
-runs the plugin's eight shaders — the FFT, the exact propagator, the caustic
-mesh and the composite — ported to WebGL2, and `demo/tools/check_shaders.py`
+runs the plugin's eight shaders (the FFT, the exact propagator, the caustic
+mesh and the composite) ported to WebGL2, and `demo/tools/check_shaders.py`
 holds that GLSL character-for-character against `source/Shaders.cpp`
-(`tools/verify.sh` runs it). The CPU half — the controls, the skim schedule, the
-PCG rain, the grid and the frame sequence — is a hand translation to JavaScript
-that nothing checks but a reader. Drop, Skim and Still are buttons there; the
+(`tools/verify.sh` runs it). The CPU half (the controls, the skim schedule, the
+PCG rain, the grid and the frame sequence) is a hand translation to JavaScript
+that nothing checks but somebody reading it. Drop, Skim and Still are buttons there; the
 audio controls are absent.
 
 ## Build
@@ -259,7 +253,7 @@ are universal (arm64 + x86_64); Windows needs GLEW via vcpkg.
 
 ## Building and testing
 
-The offline harness renders the real plugin class headlessly:
+The offline harness renders the plugin's own class headless:
 
     ./build/mptest --out /tmp/frame.png --drop 10 --skim 60   a frame, with a pebble and a skim
     ./build/mptest --fft                  the transform against a double-precision DFT
