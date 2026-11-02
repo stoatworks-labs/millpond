@@ -7,7 +7,7 @@ namespace millpond
 /**
     An off-screen buffer for one stage of the chain.
 
-    Three things on top of the SDK's FFGLFBO.
+    Four things on top of the SDK's FFGLFBO.
 
     **It reallocates only when it has to.** Ensure() is called every frame and
     is a no-op in the overwhelming majority of them.
@@ -24,6 +24,12 @@ namespace millpond
     not be filtered; the surface is read between texels AND is periodic -- the
     simulated domain wraps, so a read past its edge must come back in at the
     other side, which is `GL_REPEAT` and nothing else.
+
+    **It has no depth buffer.** `FFGLFBO::Initialise()` always attaches a
+    24-bit depth renderbuffer the size of the picture, and nothing here draws
+    with depth: at 4K that is about 32 MB a buffer for nothing. Ensure()
+    allocates through InitialiseColourOnly() instead, the same steps with the
+    colour texture alone.
 */
 class PassBuffer : public ffglex::FFGLFBO
 {
@@ -84,6 +90,11 @@ public:
 	}
 
 private:
+	/// FFGLFBO::Initialise() less the depth renderbuffer: the framebuffer, the
+	/// colour texture and its attachment, and everything released again if
+	/// the framebuffer is not complete.
+	bool InitialiseColourOnly( GLsizei requestedWidth, GLsizei requestedHeight, GLint format );
+
 	Sampling sampling = Sampling::Nearest;
 	Wrap wrap         = Wrap::Clamp;
 };
