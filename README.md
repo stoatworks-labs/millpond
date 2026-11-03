@@ -15,6 +15,8 @@ stone or let it rain. The clip becomes the bed of a pond, and you look down at i
 through the water. It's the only water feature a venue will happily let you put
 on stage.
 
+The [project page](https://stoatworks-labs.com/software/millpond/) has the downloads and the video.
+
 ![A pond bed of stones seen through rippled water: a skimmed stone's line of rings across the lower left, a pebble's rings, rain, and a net of sunlight on the bed](docs/hero.png)
 
 <sub>A skim across the lower left (its hops shorten towards the sink on the
