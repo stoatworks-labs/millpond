@@ -129,6 +129,14 @@ if(MILLPOND_BUILD_TOOLS AND APPLE)
         "-framework OpenGL"
         "-framework AppKit"
     )
+
+    # Every float a fixed set of scenes produces, for comparing two builds bit
+    # for bit (tools/offcompare.sh builds it against an older tree as well).
+    add_executable(offdump tools/offdump/main.cpp)
+    target_link_libraries(offdump PRIVATE millpond_core
+        "-framework OpenGL"
+        "-framework AppKit"
+    )
 endif()
 
 # ---------------------------------------------------------------------------
