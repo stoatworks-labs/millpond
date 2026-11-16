@@ -886,6 +886,10 @@ void MillpondPlugin::Simulate( const std::vector< Impact >& impacts, double dt, 
 		Scoped2DTextureBinding texture( spectrum[ current ].TextureID() );
 		ScopedSamplerActivation sampler1( 1 );
 		Scoped2DTextureBinding table( driveTexture );
+		ScopedSamplerActivation sampler2( 2 );
+		Scoped2DTextureBinding tableX( twiddleX );
+		ScopedSamplerActivation sampler3( 3 );
+		Scoped2DTextureBinding tableY( twiddleY );
 
 		//The seed, as a white field's RMS a cell: a Wiener process in time (so
 		//the noise a second does not depend on the frame rate) normalised by
@@ -896,6 +900,8 @@ void MillpondPlugin::Simulate( const std::vector< Impact >& impacts, double dt, 
 		const int steps = shaken->steps;
 		shakenEvolveShader.Set( "Spectrum", 0 );
 		shakenEvolveShader.Set( "DriveTable", 1 );
+		shakenEvolveShader.Set( "TwiddleX", 2 );
+		shakenEvolveShader.Set( "TwiddleY", 3 );
 		setInts( shakenEvolveShader, "GridSize", grid.nx, grid.ny );
 		shakenEvolveShader.Set( "Domain", static_cast< float >( grid.lx ), static_cast< float >( grid.ly ) );
 		shakenEvolveShader.Set( "Gravity", static_cast< float >( water.gravity ) );

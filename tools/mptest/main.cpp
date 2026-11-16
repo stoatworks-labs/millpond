@@ -151,6 +151,10 @@ struct Perturb
 	bool stateLeak         = false;///< --state-shaken leaves a texture bound on unit 2 after the frame
 	double seedBand        = 1.0;  ///< --seed expects the band around this times k_c
 	int seedMirror         = 1;    ///< --seed expects Walls' mirror at N - seedMirror - i (1 is the half cell)
+	double saturationShake = 1.0;  ///< --saturation shakes the 24 fps run this much harder
+	double saturationRate  = 1.0;  ///< --saturation expects this times the saturating rate
+	double slopeSign       = 1.0;  ///< --half expects this sign on eta_y
+	bool seedVelocity      = false;///< --seed expects the seed in eta_t, not eta
 };
 
 //---------------------------------------------------------------------------
@@ -2476,6 +2480,44 @@ bool requireShaken( Rig& rig, const char* what )
 	return false;
 }
 
+/// The Faraday evolve pass's step, in double: fourth-order Magnus, two Gauss
+/// points a substep, `steps` substeps over `dt` from drive phase `theta0`.
+/// --mathieu uses it ONLY to know how far the scheme itself may sit from the
+/// exact solution (its truncation); the expectation is always RK4.
+void magnusDouble( const MathieuMode& m, double accel, double theta0, double omegaDrive, double dt, int steps,
+                   double& eta, double& rate )
+{
+	if( steps <= 0 )
+		return;
+	const double h = dt / steps, offset = 0.5 / std::sqrt( 3.0 ), q = accel * m.perAccel, gamma = m.gamma;
+	const double decay = std::exp( -gamma * h ), corr = std::sqrt( 3.0 ) / 12.0 * h * h;
+	for( int i = 0; i < steps; ++i )
+	{
+		const double middle = ( i + 0.5 ) * h;
+		const double w1     = m.omega2 - q * std::cos( theta0 + omegaDrive * ( middle - offset * h ) );
+		const double w2     = m.omega2 - q * std::cos( theta0 + omegaDrive * ( middle + offset * h ) );
+		const double wbar = 0.5 * ( w1 + w2 ), d = corr * ( w2 - w1 );
+		const double disc = h * h * ( wbar - gamma * gamma ) - d * d;
+		double C = decay, S = decay;
+		if( disc > 0.0 )
+		{
+			const double psi = std::sqrt( disc );
+			C                = decay * std::cos( psi );
+			S                = decay * std::sin( psi ) / psi;
+		}
+		else if( disc < 0.0 )
+		{
+			const double psi = std::sqrt( -disc );
+			C                = decay * std::cosh( psi );
+			S                = decay * std::sinh( psi ) / psi;
+		}
+		const double e = C * eta + S * ( ( d + gamma * h ) * eta + h * rate );
+		const double r = C * rate - S * ( ( h * wbar + 2.0 * gamma * d ) * eta + ( gamma * h + d ) * rate );
+		eta            = e;
+		rate           = r;
+	}
+}
+
 //===========================================================================
 // --mathieu
 //===========================================================================
@@ -2488,12 +2530,20 @@ int runMathieu( const Perturb& perturb )
 		const char* what;
 		double driveHz, pond, overdrive, detune;
 		double seconds;
+		int cells        = 256;
+		double viscosity = 1e-6;
+		double k         = 0.0;///< a mode by wavenumber instead of by detune
 	};
 	const Case cases[] = {
 		{ "below threshold", 10.0, 1.5, 0.5, 0.0, 2.0 },
 		{ "twice threshold", 10.0, 1.5, 2.0, 0.0, 2.0 },
 		{ "4x, detuned 12%", 10.0, 1.5, 4.0, 0.12, 1.5 },
 		{ "capillary, 40 Hz", 40.0, 0.2, 2.0, 0.0, 1.0 },
+		//psi ~ 2.5 rad a substep: the cos / sin branch, where the series no
+		//longer reaches.
+		{ "short wave, 5 Hz", 5.0, 0.2, 2.0, 0.0, 1.0, 512, 1e-6, 1370.0 },
+		//Syrup: overdamped, psi^2 ~ -7, the cosh / sinh branch.
+		{ "syrup, overdamped", 5.0, 0.2, 2.0, 0.0, 0.3, 256, 1e-3, 500.0 },
 	};
 
 	for( const Case& c : cases )
@@ -2503,11 +2553,12 @@ int runMathieu( const Perturb& perturb )
 			return 1;
 		ShakeSetup setup;
 		setup.pond      = c.pond;
-		setup.cells     = 256;
+		setup.cells     = c.cells;
 		setup.driveHz   = c.driveHz;
 		setup.overdrive = 0.0;
 		setup.seed      = false;
 		applyShake( rig, setup );
+		rig.Set( PT_VISCOSITY, viscosityParam( c.viscosity ) );
 		if( !rig.Render( 1 ) )
 			return 1;
 
@@ -2515,19 +2566,24 @@ int runMathieu( const Perturb& perturb )
 		const Water water = rig.plugin.CurrentWater();
 		const double omegaDrive = 2.0 * kPi * c.driveHz;
 		const double kc   = dispersionWavenumber( 0.5 * omegaDrive, water );
-		const int mx      = static_cast< int >( std::lround( kc * ( 1.0 + c.detune ) * g.lx / ( 2.0 * kPi ) ) );
+		const double kWanted = c.k > 0.0 ? c.k : kc * ( 1.0 + c.detune );
+		const int mx      = static_cast< int >( std::lround( kWanted * g.lx / ( 2.0 * kPi ) ) );
 		const MathieuMode mode = mathieuMode( 2.0 * kPi * mx / g.lx, water, setup.damping );
 
 		//Small enough that the saturating damping is nothing beside the
 		//tolerance at the end of the run: start low by the growth expected.
-		const double growth = std::max( 0.0, ( c.overdrive - 1.0 ) * mode.gamma );
+		const double growth = c.k > 0.0 ? 0.0 : std::max( 0.0, ( c.overdrive - 1.0 ) * mode.gamma );//off resonance nothing grows
 		const double amp0   = 1e-6 * std::exp( -growth * c.seconds );
 		rig.plugin.LoadSurfaceForTest( modeState( g, mx, 0, amp0 ) );
 
 		setup.overdrive = c.overdrive;
 		applyShake( rig, setup );
+		rig.Set( PT_VISCOSITY, viscosityParam( c.viscosity ) );
 
 		double eta = amp0, rate = 0.0, t = 0.0, theta0 = 0.0, accel = 0.0, drive = omegaDrive;
+		//The scheme's own answer in double, and RK4's at the plugin's own shake:
+		//their difference is the budget, never the expectation.
+		double mEta = amp0, mRate = 0.0, rEta = amp0, rRate = 0.0;
 		int substeps = 0;
 		bool first = true, steady = true;
 		const int frames = static_cast< int >( std::lround( c.seconds * rig.fps ) );
@@ -2548,6 +2604,8 @@ int runMathieu( const Perturb& perturb )
 			steady = steady && rig.plugin.FaradayAcceleration() == accel;
 			substeps += rig.plugin.FaradaySteps();
 			mathieuRK4( mode, accel * perturb.mathieuForcing, theta0, drive, t, step, 2000, eta, rate );
+			magnusDouble( mode, accel, faraday::Wrap( theta0 + drive * t ), drive, step, rig.plugin.FaradaySteps(), mEta, mRate );
+			mathieuRK4( mode, accel, theta0, drive, t, step, 2000, rEta, rRate );
 			t += step;
 		}
 
@@ -2558,17 +2616,20 @@ int runMathieu( const Perturb& perturb )
 		const double size    = std::hypot( eta, rate / omega0 );
 		const double error   = std::hypot( gotEta - eta, ( gotRate - rate ) / omega0 ) / size;
 
-		//The budget: fourth-order Magnus at 32 substeps a drive period is
-		//within 6e-5 of RK4 over these runs (measured in double, AGENTS.md);
-		//float rounding is at most a few ulp a substep, 16 x 6e-8 x the
-		//substeps. Nothing here is fitted to what this machine printed.
-		const double tolerance = 1e-4 + 16.0 * 6e-8 * substeps;
+		//The budget: the scheme's own truncation -- the same fourth-order
+		//Magnus steps run here in double, against RK4 -- plus float rounding,
+		//at most a few ulp a substep, 16 x 6e-8 x the substeps, plus 1e-5.
+		//The truncation is 1e-5 to 1e-4 for the resonant cases and about
+		//4e-4 where psi or the damping is large. Nothing here is fitted to
+		//what this machine printed.
+		const double truncation = std::hypot( mEta - rEta, ( mRate - rRate ) / omega0 ) / std::hypot( rEta, rRate / omega0 );
+		const double tolerance  = truncation + 1e-5 + 16.0 * 6e-8 * substeps;
 		const double saturation = 150.0 * mode.gamma * mode.k * mode.k * size * size * c.seconds;
 		Check( steady && error < tolerance,
-		       fmt( "%-17s k=%6.1f (k_c %6.1f) a=%.3f m/s^2: |y| %.3e (expect %.3e), error %.2e of |y| (bound %.1e, "
-		            "%d substeps; saturation %.0e)",
-		            c.what, mode.k, kc, accel, std::hypot( gotEta, gotRate / omega0 ), size, error, tolerance, substeps,
-		            saturation ) );
+		       fmt( "%-17s k=%6.1f (k_c %6.1f) a=%.3f m/s^2: |y| %.3e (expect %.3e), error %.2e of |y| (bound %.1e: "
+		            "truncation %.1e, %d substeps; saturation %.0e)",
+		            c.what, mode.k, kc, accel, std::hypot( gotEta, gotRate / omega0 ), size, error, tolerance, truncation,
+		            substeps, saturation ) );
 	}
 	return Verdict();
 }
@@ -2808,6 +2869,60 @@ int runHalf( const Perturb& perturb )
 	const double two   = correlation( at[ 0 ], at[ 6 ] );
 	const double twenty = correlation( at[ 0 ], at[ 60 ] );
 
+	//And the slopes the optics will read are the gradient of that eta: the
+	//shaken pass writes them itself. The harness's own spectral derivative,
+	//in double; the plugin's float transforms round at about 1e-6.
+	double slopeError = 0.0, slopeSize = 0.0;
+	{
+		const Grid g    = rig.plugin.CurrentGrid();
+		const Floats& s = at[ 0 ];
+		std::vector< Complex > field( static_cast< size_t >( g.nx ) * g.ny );
+		for( size_t i = 0; i < field.size(); ++i )
+			field[ i ] = { s[ i * 4 ], 0.0 };
+		auto transform = [ & ]( std::vector< Complex >& f, double sign ) {
+			std::vector< Complex > line( static_cast< size_t >( g.nx ) );
+			for( int y = 0; y < g.ny; ++y )
+			{
+				std::copy( f.begin() + static_cast< long >( y ) * g.nx, f.begin() + static_cast< long >( y + 1 ) * g.nx, line.begin() );
+				fftLine( line, sign );
+				std::copy( line.begin(), line.end(), f.begin() + static_cast< long >( y ) * g.nx );
+			}
+			std::vector< Complex > column( static_cast< size_t >( g.ny ) );
+			for( int x = 0; x < g.nx; ++x )
+			{
+				for( int y = 0; y < g.ny; ++y )
+					column[ y ] = f[ static_cast< size_t >( y ) * g.nx + x ];
+				fftLine( column, sign );
+				for( int y = 0; y < g.ny; ++y )
+					f[ static_cast< size_t >( y ) * g.nx + x ] = column[ y ];
+			}
+		};
+		transform( field, -1.0 );
+		std::vector< Complex > dx( field.size() ), dy( field.size() );
+		for( int y = 0; y < g.ny; ++y )
+			for( int x = 0; x < g.nx; ++x )
+			{
+				const size_t i = static_cast< size_t >( y ) * g.nx + x;
+				if( x == g.nx / 2 || y == g.ny / 2 )
+					continue;//Nyquist, as the plugin
+				const int mx = x < g.nx / 2 ? x : x - g.nx, my = y < g.ny / 2 ? y : y - g.ny;
+				const double kx = 2.0 * kPi * mx / g.lx, ky = 2.0 * kPi * my / g.ly;
+				dx[ i ] = { -kx * field[ i ].second, kx * field[ i ].first };
+				dy[ i ] = { -ky * field[ i ].second, ky * field[ i ].first };
+			}
+		transform( dx, 1.0 );
+		transform( dy, 1.0 );
+		const double n = static_cast< double >( field.size() );
+		for( size_t i = 0; i < field.size(); ++i )
+		{
+			const double ex = s[ i * 4 + 2 ] - dx[ i ].first / n;
+			const double ey = s[ i * 4 + 3 ] - perturb.slopeSign * dy[ i ].first / n;
+			slopeError += ex * ex + ey * ey;
+			slopeSize += ( dx[ i ].first * dx[ i ].first + dy[ i ].first * dy[ i ].first ) / ( n * n );
+		}
+	}
+	const double slopeRelative = slopeSize > 0.0 ? std::sqrt( slopeError / slopeSize ) : 1.0;
+
 	//0.9 is cos( 0.45 rad ): twenty drive periods on, a response off f/2 by
 	//more than 0.036 Hz (0.7%) would have slipped that far. It also takes in
 	//the lattice's own slow change over two seconds, which is the only reason
@@ -2818,6 +2933,8 @@ int runHalf( const Perturb& perturb )
 	                               perturb.halfHarmonic ? "the same" : "upside down", one, perturb.halfHarmonic ? ">+" : "<-" ) );
 	Check( two > 0.9, fmt( "two drive periods on, it is back: correlation %+.4f (expect >+0.9)", two ) );
 	Check( twenty > 0.9, fmt( "twenty drive periods on, still in step -- f/2 to 0.7%%: correlation %+.4f (expect >+0.9)", twenty ) );
+	Check( slopeRelative < 1e-4,
+	       fmt( "its slopes are eta's gradient: RMS difference %.1e of the slope (bound 1e-4)", slopeRelative ) );
 	return Verdict();
 }
 
@@ -2902,6 +3019,44 @@ int runSeed( const Perturb& perturb )
 {
 	std::printf( "\n=== seed: in silence the shaken pond gets only a little noise near k_c, mirrored at Walls\n" );
 
+	//A displacement, not a velocity: the frame that first seeds still water
+	//leaves eta_t at zero (Hermitian noise has no imaginary part to leak into
+	//the packed eta_t). Float transforms round at about 1e-6.
+	for( const bool walls : { false, true } )
+	{
+		Rig rig;
+		if( !rig.Init( g_checkWidth, g_checkHeight ) )
+			return 1;
+		ShakeSetup setup;
+		setup.pond  = 0.5;
+		setup.walls = walls;
+		applyShake( rig, setup );
+		rig.feed = AudioFeed::Silence;
+		double etaRms = 0.0, rateRms = 0.0, cells = 1.0;
+		for( int f = 0; f < 4 && etaRms == 0.0; ++f )
+		{
+			if( !rig.Render( 1 ) )
+				return 1;
+			const Floats s = rig.Surface();
+			const double omegaC = kPi * rig.plugin.FaradayDriveHz();
+			etaRms = rateRms = 0.0;
+			cells  = static_cast< double >( s.size() / 4 );
+			for( size_t i = 0; i < s.size(); i += 4 )
+			{
+				etaRms += static_cast< double >( s[ i ] ) * s[ i ];
+				const double r = kRateScale * static_cast< double >( s[ i + 1 ] ) / omegaC;
+				rateRms += r * r;
+			}
+		}
+		if( !requireShaken( rig, "seed" ) )
+			return 1;
+		const double ratio = etaRms > 0.0 ? std::sqrt( ( perturb.seedVelocity ? etaRms : rateRms ) / etaRms ) : 1.0;
+		const double other = etaRms > 0.0 ? std::sqrt( ( perturb.seedVelocity ? rateRms : etaRms ) / etaRms ) : 0.0;
+		Check( etaRms > 0.0 && ratio < 1e-4 && other > 0.0,
+		       fmt( "%-5s: the first seeded frame moves eta (RMS %.2e m) and leaves eta_t / omega_c at %.1e of it (bound 1e-4)",
+		            walls ? "Walls" : "Open", std::sqrt( etaRms / cells ), ratio ) );
+	}
+
 	for( const bool walls : { false, true } )
 	{
 		Rig rig;
@@ -2970,6 +3125,149 @@ int runSeed( const Perturb& perturb )
 			       fmt( "Walls: the seeded pond is its own mirror image to %.1e of its RMS (bound 1e-4)", relative ) );
 		}
 	}
+	return Verdict();
+}
+
+//===========================================================================
+// --saturation
+//===========================================================================
+int runSaturation( const Perturb& perturb )
+{
+	std::printf( "\n=== saturation: the lattice stands at the same height at any frame rate and Speed\n" );
+
+	//Twenty seconds of water at four frame clocks, each ending at a different
+	//phase of the response (0, 1/4, 5/12 and 1/3 of a period on): 60 fps,
+	//40 fps, 24 fps, and 60 fps at Speed 4 -- a fifteenth of a second a frame,
+	//a third of a response period, so every frame of it lands on one of three
+	//phases.
+	struct Run
+	{
+		double fps, speed;
+		int frames;
+	};
+	const Run runs[] = { { 60.0, 1.0, 1200 }, { 40.0, 1.0, 802 }, { 24.0, 1.0, 482 }, { 60.0, 4.0, 301 } };
+
+	ShakeSetup setup;
+	setup.pond      = 0.5;
+	setup.walls     = true;
+	setup.overdrive = 2.0;
+	setup.pattern   = static_cast< int >( Pattern::Stripes );
+
+	std::vector< double > heights;
+	double kc = 0.0, omegaDrive = 0.0, accel = 0.0;
+	Water water;
+	for( const Run& run : runs )
+	{
+		Rig rig;
+		rig.fps = run.fps;
+		if( !rig.Init( g_checkWidth, g_checkHeight ) )
+			return 1;
+		ShakeSetup s = setup;
+		s.speed      = run.speed;
+		if( run.fps == 24.0 )
+			s.overdrive *= perturb.saturationShake;
+		applyShake( rig, s );
+		if( !rig.Render( run.frames ) || !requireShaken( rig, "saturation" ) )
+			return 1;
+		const double omegaC = kPi * rig.plugin.FaradayDriveHz();
+		heights.push_back( rmsAmplitude( rig.Surface(), omegaC ) );
+		water      = rig.plugin.CurrentWater();
+		kc         = dispersionWavenumber( omegaC, water );
+		omegaDrive = 2.0 * omegaC;
+		if( run.fps == 60.0 && run.speed == 1.0 )
+			accel = rig.plugin.FaradayAcceleration();
+	}
+
+	//The bound. The saturation damps by the envelope eta^2 + ( eta_t / omega_c )^2
+	//sampled once a frame, which is phase-independent only for a pure sinusoid
+	//at omega_c; the Mathieu solution carries harmonics, so the envelope
+	//swings within the cycle between A_min and A_max. A frame clock that
+	//samples one phase saturates the lattice by THAT phase's envelope, and the
+	//height read at the end is again one phase's: so two runs can differ by
+	//at most ( A_max / A_min )^2. A_max / A_min is the harness's own: the
+	//k_c mode's neutral Floquet solution (damping raised until it neither
+	//grows nor decays at this shake, which is what saturation does), by RK4.
+	MathieuMode m  = mathieuMode( kc, water, setup.damping );
+	double lo = m.gamma, hi = m.gamma + accel * m.perAccel / omegaDrive * 4.0;
+	for( int i = 0; i < 60; ++i )
+	{
+		MathieuMode trial = m;
+		trial.gamma       = 0.5 * ( lo + hi );
+		( floquetExponent( trial, accel, omegaDrive ) > 0.0 ? lo : hi ) = trial.gamma;
+	}
+	m.gamma = 0.5 * ( lo + hi );
+	const double period = 2.0 * kPi / omegaDrive;
+	double eta = 1.0, rate = 0.0;
+	mathieuRK4( m, accel, 0.0, omegaDrive, 0.0, 40.0 * period, 40 * 400, eta, rate );//the decaying solution dies
+	double aMin = 1e300, aMax = 0.0;
+	for( int i = 0; i < 400; ++i )
+	{
+		mathieuRK4( m, accel, 0.0, omegaDrive, ( 40.0 + i / 400.0 ) * period, period / 400.0, 1, eta, rate );
+		const double a = std::sqrt( eta * eta + rate * rate / ( 0.25 * omegaDrive * omegaDrive ) );
+		aMin           = std::min( aMin, a );
+		aMax           = std::max( aMax, a );
+	}
+	const double bound = ( aMax / aMin ) * ( aMax / aMin );
+
+	//The law itself, on the one mode where it can be read straight off: the
+	//uniform level (k = 0). It has no restoring force and no forcing, so a
+	//frame only damps it (the walls' rate, exactly) -- and saturates it by
+	//exp( -beta A~^2 dt ), A~^2 = eta^2 + ( eta_t / omega_c )^2, with beta
+	//the plugin's own (FaradaySatRate). Two levels: beta A~^2 dt = 0.09, on
+	//the series side of the pass's exp, and 0.6, on the exp side. The level
+	//is a sum over every cell, so the transforms round at about 1e-6.
+	for( const double z : { 0.09, 0.6 } )
+	{
+		Rig rig;
+		if( !rig.Init( g_checkWidth, g_checkHeight ) )
+			return 1;
+		ShakeSetup s = setup;
+		s.seed       = false;
+		applyShake( rig, s );
+		if( !rig.Render( 2 ) || !requireShaken( rig, "saturation" ) )
+			return 1;
+		const double beta   = rig.plugin.FaradaySatRate();
+		const double omegaC = kPi * rig.plugin.FaradayDriveHz();
+		const double dt     = 1.0 / rig.fps;
+		const double eta0   = std::sqrt( z / ( beta * dt * 1.25 ) );
+		const double rate0  = 0.5 * omegaC * eta0;//a quarter of A~^2
+		const Grid g        = rig.plugin.CurrentGrid();
+		Floats state( static_cast< size_t >( g.nx ) * g.ny * 4, 0.0f );
+		for( size_t i = 0; i < state.size(); i += 4 )
+		{
+			state[ i ]     = static_cast< float >( eta0 );
+			state[ i + 1 ] = static_cast< float >( rate0 / kRateScale );
+		}
+		rig.plugin.LoadSurfaceForTest( state );
+		if( !rig.Render( 1 ) )
+			return 1;
+		const double step  = rig.plugin.FaradayWaterStep();
+		const double gamma = setup.damping;//k = 0: Lamb's term is zero
+		const double keep  = std::exp( -perturb.saturationRate * beta * ( eta0 * eta0 + rate0 * rate0 / ( omegaC * omegaC ) ) * step );
+		const double wantEta  = keep * ( eta0 + rate0 * ( 1.0 - std::exp( -2.0 * gamma * step ) ) / ( 2.0 * gamma ) );
+		const double wantRate = keep * rate0 * std::exp( -2.0 * gamma * step );
+		const Floats back = rig.Surface();
+		double sumEta = 0.0, sumRate = 0.0;
+		for( size_t i = 0; i < back.size(); i += 4 )
+		{
+			sumEta += back[ i ];
+			sumRate += kRateScale * static_cast< double >( back[ i + 1 ] );
+		}
+		const double n     = static_cast< double >( back.size() / 4 );
+		const double error = std::hypot( sumEta / n - wantEta, ( sumRate / n - wantRate ) / omegaC ) /
+		                     std::hypot( wantEta, wantRate / omegaC );
+		Check( error < 1e-5,
+		       fmt( "the uniform level at beta A~^2 dt = %.2f: kept %.6f of itself (expect %.6f), error %.1e (bound 1e-5)",
+		            beta * ( eta0 * eta0 + rate0 * rate0 / ( omegaC * omegaC ) ) * step, ( sumEta / n ) / ( eta0 + rate0 * ( 1.0 - std::exp( -2.0 * gamma * step ) ) / ( 2.0 * gamma ) ),
+		            keep, error ) );
+	}
+
+	const double top    = *std::max_element( heights.begin(), heights.end() );
+	const double bottom = *std::min_element( heights.begin(), heights.end() );
+	Check( bottom > 1e-4 && top / bottom <= bound,
+	       fmt( "heights %.3e (60 fps), %.3e (40), %.3e (24), %.3e (60, Speed 4) m: spread x%.3f "
+	            "(bound x%.3f, the envelope's swing in the neutral Floquet solution, squared)",
+	            heights[ 0 ], heights[ 1 ], heights[ 2 ], heights[ 3 ], top / bottom, bound ) );
 	return Verdict();
 }
 
@@ -3539,6 +3837,26 @@ int runFaradayNegative()
 	}
 	{
 		Perturb p;
+		p.saturationShake = 2.0;
+		cases.push_back( { "saturation (rate)", runSaturation, p, "shake the 24 fps run twice as hard" } );
+	}
+	{
+		Perturb p;
+		p.saturationRate = 1.01;
+		cases.push_back( { "saturation (law)", runSaturation, p, "expect the saturating rate 1% stronger" } );
+	}
+	{
+		Perturb p;
+		p.slopeSign = -1.0;
+		cases.push_back( { "half (slopes)", runHalf, p, "expect eta_y with the opposite sign" } );
+	}
+	{
+		Perturb p;
+		p.seedVelocity = true;
+		cases.push_back( { "seed (displacement)", runSeed, p, "expect the seed in eta_t rather than eta" } );
+	}
+	{
+		Perturb p;
 		p.seedBand = 1.5;
 		cases.push_back( { "seed (band)", runSeed, p, "expect the seed's band at 1.5 k_c" } );
 	}
@@ -3719,6 +4037,47 @@ int runBench()
 		             size.cells, ms, 100.0 * ms / ( 1000.0 / 60.0 ), g.nx, g.ny, rig.plugin.MeshColumns(),
 		             rig.plugin.MeshRows() );
 	}
+
+	//Faraday: the same busy frame, off and shaken, in one run so the rows
+	//compare. Shaken at the defaults (10 Hz: six substeps a 60 fps frame,
+	//Squares, so the kernel's two transforms run too), and at 120 Hz with
+	//Speed at 4 (64 substeps a frame): the substeps are the cost that grows.
+	std::printf( "\n  Faraday (Detail 1024, rain 0.5, a steady bass):\n" );
+	struct Shake
+	{
+		const char* name;
+		float shake;
+		double driveHz, speed;
+	};
+	const Shake shakes[] = { { "off", 0.0f, 10.0, 1.0 }, { "10 Hz", 1.0f, 10.0, 1.0 }, { "120 Hz x4", 1.0f, 120.0, 4.0 } };
+	const Size faradaySizes[] = { { 1280, 720, "720p", 1024 }, { 1920, 1080, "1080p", 1024 } };
+	for( const Size& size : faradaySizes )
+		for( const Shake& shake : shakes )
+		{
+			Rig rig;
+			if( !rig.Init( size.w, size.h ) )
+				return 1;
+			rig.Set( PT_DETAIL, detailParam( size.cells ) );
+			rig.Set( PT_RAIN, 0.5f );
+			rig.Set( PT_SHAKE, shake.shake );
+			rig.Set( PT_DRIVE, ParamFromDrive( static_cast< float >( shake.driveHz ) ) );
+			rig.Set( PT_SPEED, ParamFromSpeed( static_cast< float >( shake.speed ) ) );
+			rig.feed = AudioFeed::Drone;
+			if( !rig.Render( 20 ) )
+				return 1;
+			glFinish();
+
+			constexpr int kTimed = 60;
+			const auto start     = std::chrono::steady_clock::now();
+			if( !rig.Render( kTimed ) )
+				return 1;
+			glFinish();
+			const auto end = std::chrono::steady_clock::now();
+			const double ms =
+				std::chrono::duration< double, std::milli >( end - start ).count() / static_cast< double >( kTimed );
+			std::printf( "  %-6s %-10s %6.2f ms/frame  (%4.1f%% of 60 fps; %d substeps a frame)\n", size.name, shake.name,
+			             ms, 100.0 * ms / ( 1000.0 / 60.0 ), rig.plugin.FaradayActive() ? rig.plugin.FaradaySteps() : 0 );
+		}
 	return 0;
 }
 
@@ -4029,6 +4388,7 @@ int main( int argc, char** argv )
 				"  --caustics --still --skim-check --rain --audio --state --negative --bench\n\n"
 				"  Faraday, at the raster --size gives (MPTEST_RENDERER=software for Apple's software renderer):\n"
 				"  --mathieu --onset --half --wavelength --pattern --strobe --clock --resize --seed\n"
+				"  --saturation\n"
 				"  --faraday-off --rate --state-shaken --faraday-negative\n" );
 			return 0;
 		}
@@ -4078,7 +4438,7 @@ int main( int argc, char** argv )
 		         || argument == "--fresnel" || argument == "--caustics" || argument == "--still"
 		         || argument == "--rain" || argument == "--audio" || argument == "--negative" || argument == "--bench"
 		         || argument == "--state" || argument == "--mathieu" || argument == "--onset" || argument == "--half"
-		         || argument == "--wavelength" || argument == "--pattern" || argument == "--strobe" || argument == "--seed"
+		         || argument == "--wavelength" || argument == "--pattern" || argument == "--strobe" || argument == "--seed" || argument == "--saturation"
 		         || argument == "--clock" || argument == "--resize" || argument == "--faraday-off"
 		         || argument == "--rate" || argument == "--state-shaken" || argument == "--faraday-negative" )
 			mode = argument.substr( 2 );
@@ -4137,7 +4497,7 @@ int main( int argc, char** argv )
 		{ "still", runStill },     { "skim", runSkim },         { "rain", runRain },
 		{ "audio", runAudio },       { "state", runState },
 		{ "mathieu", runMathieu },   { "onset", runOnset },       { "half", runHalf },
-		{ "wavelength", runWavelength }, { "pattern", runPattern }, { "strobe", runStrobe }, { "seed", runSeed },
+		{ "wavelength", runWavelength }, { "pattern", runPattern }, { "strobe", runStrobe }, { "seed", runSeed }, { "saturation", runSaturation },
 		{ "clock", runClock },       { "resize", runResize },     { "faraday-off", runFaradayOff },
 		{ "rate", runRate },         { "state-shaken", runStateShaken },
 	};

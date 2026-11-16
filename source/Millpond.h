@@ -146,6 +146,11 @@ public:
 	{
 		return lastShake.wavenumber;
 	}
+	/// The saturating damping's strength the last frame used, 1 / ( m^2 s ).
+	double FaradaySatRate() const
+	{
+		return lastShake.satRate;
+	}
 	/// The water time the last frame covered, and how many substeps.
 	double FaradayWaterStep() const
 	{

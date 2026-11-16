@@ -653,6 +653,8 @@ const char* const kFaradayEvolveShader = R"(#version 410 core
 
 uniform sampler2D Spectrum;  //Z = FFT( eta + i eta_t / RateScale )
 uniform sampler2D DriveTable;//RG32F, Steps x 1: cos( drive phase ) at each substep's two Gauss points, from doubles
+uniform sampler2D TwiddleX;  //RG32F, Nx x 1: exp( -2 pi i m / Nx ), from doubles (the transform's own)
+uniform sampler2D TwiddleY;  //RG32F, Ny x 1
 uniform ivec2 GridSize;
 uniform vec2 Domain;
 uniform float Gravity;       //m/s^2
@@ -681,6 +683,29 @@ float expNeg( float z )
 	return exp( -z );
 }
 
+//( cos x, sin x ) for x >= 0 by quadrant and series, with nothing
+//transcendental: Apple's software renderer's cos and sin are far enough off
+//that 180 substeps of them put a short wave 17% wrong. x is reduced by the
+//nearest multiple of pi / 2 in two parts (Cody and Waite: the float nearest
+//pi / 2 is 4.37e-8 too big), leaving |r| <= pi / 4, where the next terms are
+//under 3e-8.
+vec2 cosSin( float x )
+{
+	float n  = floor( x * 0.636619772 + 0.5 );
+	float r  = ( x - n * 1.57079637 ) + n * 4.37113883e-8;
+	float r2 = r * r;
+	float c  = 1.0 + r2 * ( -1.0 / 2.0 + r2 * ( 1.0 / 24.0 + r2 * ( -1.0 / 720.0 + r2 * ( 1.0 / 40320.0 ) ) ) );
+	float s  = r * ( 1.0 + r2 * ( -1.0 / 6.0 + r2 * ( 1.0 / 120.0 + r2 * ( -1.0 / 5040.0 + r2 * ( 1.0 / 362880.0 ) ) ) ) );
+	int q    = int( mod( n, 4.0 ) );
+	if( q == 0 )
+		return vec2( c, s );
+	if( q == 1 )
+		return vec2( -s, c );
+	if( q == 2 )
+		return vec2( -c, -s );
+	return vec2( s, -c );
+}
+
 uint mixBits( uint x )
 {
 	//lowbias32, as the caustic mesh's jitter: integer, the same on every machine.
@@ -698,6 +723,23 @@ float noiseAt( ivec2 at, uint salt )
 	uint h  = mixBits( ( uint( at.x ) * 0x9e3779b9u ) ^ mixBits( ( uint( at.y ) + 0x632be5abu ) ^ mixBits( uint( Seed ) * 2u + salt ) ) );
 	float u = ( float( h >> 8u ) + 0.5 ) / 16777216.0;
 	return 1.73205081 * ( 2.0 * u - 1.0 );
+}
+
+//A real field's noise at one cell of the spectrum: one complex number a
+//pair, A( -m ) = conj A( m ), taken from whichever of the two cells comes
+//first. Unit variance in each half.
+vec2 hermitian( ivec2 at )
+{
+	ivec2 opp  = ivec2( ( GridSize.x - at.x ) % GridSize.x, ( GridSize.y - at.y ) % GridSize.y );
+	bool first = at.x < opp.x || ( at.x == opp.x && at.y <= opp.y );
+	ivec2 key  = first ? at : opp;
+	float sign = at == opp ? 0.0 : ( first ? 1.0 : -1.0 );
+	return vec2( noiseAt( key, 0u ), sign * noiseAt( key, 1u ) );
+}
+
+vec2 cmul( vec2 a, vec2 b )
+{
+	return vec2( a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x );
 }
 
 void main()
@@ -750,7 +792,9 @@ void main()
 	//(700 substeps of them missed the Mathieu solution by 15%). So for
 	//|psi| < 1 -- every mode near the lattice -- C and S are their series in
 	//psi^2, which hold on both sides of critical damping and need nothing
-	//transcendental (the sixth term is under 2e-9).
+	//transcendental (the sixth term is under 2e-9); past it, cos and sin come
+	//from cosSin. The overdamped side keeps exp, which that renderer gets
+	//right to the measurement's precision (--mathieu's syrup case).
 	float h     = Step;
 	float decay = expNeg( gamma * h );
 	float corr  = 0.144337567 * h * h;
@@ -776,8 +820,9 @@ void main()
 		else if( disc > 0.0 )
 		{
 			float psi = sqrt( disc );
-			C         = decay * cos( psi );
-			S         = decay * sin( psi ) / psi;
+			vec2 cs   = cosSin( psi );
+			C         = decay * cs.x;
+			S         = decay * cs.y / psi;
 		}
 		else
 		{
@@ -806,27 +851,26 @@ void main()
 	//what a white field of SeedAmp a cell would give it, times a Gaussian band;
 	//no orientation is preferred, and the mean level (m = 0) is never moved.
 	//
-	//eta is real, so A( -m ) = conj A( m ): one complex number a pair, taken
-	//from whichever of the two cells comes first. With Walls the field must
+	//eta is real, so the noise is Hermitian (above). With Walls the field must
 	//also be its own mirror image about the half cell, eta( N-1-i ) = eta( i ),
-	//which is A( m ) = r exp( i pi m / N ) with r real and the same at all four
-	//of ( +-mx, +-my ).
+	//which in the spectrum is A( m ) = P A( -m ), P = exp( 2 pi i m / N ): so
+	//the noise is averaged over the two mirrors, with P from the transform's
+	//own twiddles (computed in double) rather than this GPU's cos and sin --
+	//Apple's software renderer's, good to 2e-4, broke the mirror by 1e-3.
 	if( SeedAmp > 0.0 && ( m.x != 0 || m.y != 0 ) )
 	{
 		float band = ( k - Wavenumber ) / ( SeedWidth * Wavenumber );
 		float amp  = SeedAmp * sqrt( float( GridSize.x ) * float( GridSize.y ) ) * exp( -0.25 * band * band );
 		if( Walls != 0 )
 		{
-			float phase = 3.14159265 * ( float( m.x ) / float( GridSize.x ) + float( m.y ) / float( GridSize.y ) );
-			A2 += amp * noiseAt( abs( m ), 0u ) * vec2( cos( phase ), sin( phase ) );
+			vec2 px = texelFetch( TwiddleX, ivec2( cell.x, 0 ), 0 ).xy * vec2( 1.0, -1.0 );
+			vec2 py = texelFetch( TwiddleY, ivec2( cell.y, 0 ), 0 ).xy * vec2( 1.0, -1.0 );
+			vec2 n  = hermitian( cell ) + cmul( px, hermitian( ivec2( opposite.x, cell.y ) ) )
+			          + cmul( py, hermitian( ivec2( cell.x, opposite.y ) ) ) + cmul( cmul( px, py ), hermitian( opposite ) );
+			A2 += amp * 0.35355339 * n;
 		}
 		else
-		{
-			bool first = cell.x < opposite.x || ( cell.x == opposite.x && cell.y <= opposite.y );
-			ivec2 key  = first ? cell : opposite;
-			float sign = cell == opposite ? 0.0 : ( first ? 1.0 : -1.0 );
-			A2 += amp * 0.70710678 * vec2( noiseAt( key, 0u ), sign * noiseAt( key, 1u ) );
-		}
+			A2 += amp * 0.70710678 * hermitian( cell );
 	}
 
 	//Pack for the way back, as in the evolve pass.
