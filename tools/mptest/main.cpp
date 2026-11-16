@@ -2533,6 +2533,7 @@ int runMathieu( const Perturb& perturb )
 		int cells        = 256;
 		double viscosity = 1e-6;
 		double k         = 0.0;///< a mode by wavenumber instead of by detune
+		double psi       = 0.0;///< or by its phase a substep, for the cos / sin branch's quadrants
 	};
 	const Case cases[] = {
 		{ "below threshold", 10.0, 1.5, 0.5, 0.0, 2.0 },
@@ -2540,8 +2541,16 @@ int runMathieu( const Perturb& perturb )
 		{ "4x, detuned 12%", 10.0, 1.5, 4.0, 0.12, 1.5 },
 		{ "capillary, 40 Hz", 40.0, 0.2, 2.0, 0.0, 1.0 },
 		//psi ~ 2.5 rad a substep: the cos / sin branch, where the series no
-		//longer reaches.
-		{ "short wave, 5 Hz", 5.0, 0.2, 2.0, 0.0, 1.0, 512, 1e-6, 1370.0 },
+		//longer reaches -- quadrant 2 of its reduction (n mod 4 = 2).
+		{ "short wave, q 2", 5.0, 0.2, 2.0, 0.0, 1.0, 512, 1e-6, 1370.0 },
+		//The other three quadrants. Each returns its own pair of signs, and a
+		//mutant of any one of them is invisible to modes that never land in
+		//it: quadrant 1 is psi in [pi/4, 3pi/4], 3 is [5pi/4, 7pi/4] and 0
+		//(above the series' psi = 1) is [7pi/4, 9pi/4]. The short ones damp at
+		//2 nu k^2 ~ 10-15/s, so they run 0.3 s.
+		{ "short wave, q 1", 5.0, 0.2, 2.0, 0.0, 1.0, 1024, 1e-6, 0.0, 1.7 },
+		{ "short wave, q 3", 5.0, 0.2, 2.0, 0.0, 0.3, 1024, 1e-6, 0.0, 4.7 },
+		{ "short wave, q 0", 5.0, 0.2, 2.0, 0.0, 0.3, 1024, 1e-6, 0.0, 6.3 },
 		//Syrup: overdamped, psi^2 ~ -7, the cosh / sinh branch.
 		{ "syrup, overdamped", 5.0, 0.2, 2.0, 0.0, 0.3, 256, 1e-3, 500.0 },
 	};
@@ -2567,12 +2576,31 @@ int runMathieu( const Perturb& perturb )
 		const double omegaDrive = 2.0 * kPi * c.driveHz;
 		const double kc   = dispersionWavenumber( 0.5 * omegaDrive, water );
 		const double kWanted = c.k > 0.0 ? c.k : kc * ( 1.0 + c.detune );
-		const int mx      = static_cast< int >( std::lround( kWanted * g.lx / ( 2.0 * kPi ) ) );
+		int mx               = static_cast< int >( std::lround( kWanted * g.lx / ( 2.0 * kPi ) ) );
+		if( c.psi > 0.0 )
+		{
+			//The mode whose damped frequency times the plugin's substep is
+			//nearest psi. The substep is DriveTable's: a frame's water time
+			//over ceil( periods x 32 ) steps.
+			const double frame = 1.0 / rig.fps;
+			const double h     = frame / std::ceil( frame * c.driveHz * faraday::kStepsPerPeriod );
+			double best        = 1e30;
+			for( int m = 1; m < g.nx / 2; ++m )
+			{
+				const MathieuMode trial = mathieuMode( 2.0 * kPi * m / g.lx, water, setup.damping );
+				const double psi        = std::sqrt( std::max( trial.omega2 - trial.gamma * trial.gamma, 0.0 ) ) * h;
+				if( std::fabs( psi - c.psi ) < best )
+				{
+					best = std::fabs( psi - c.psi );
+					mx   = m;
+				}
+			}
+		}
 		const MathieuMode mode = mathieuMode( 2.0 * kPi * mx / g.lx, water, setup.damping );
 
 		//Small enough that the saturating damping is nothing beside the
 		//tolerance at the end of the run: start low by the growth expected.
-		const double growth = c.k > 0.0 ? 0.0 : std::max( 0.0, ( c.overdrive - 1.0 ) * mode.gamma );//off resonance nothing grows
+		const double growth = c.k > 0.0 || c.psi > 0.0 ? 0.0 : std::max( 0.0, ( c.overdrive - 1.0 ) * mode.gamma );//off resonance nothing grows
 		const double amp0   = 1e-6 * std::exp( -growth * c.seconds );
 		rig.plugin.LoadSurfaceForTest( modeState( g, mx, 0, amp0 ) );
 
@@ -2627,9 +2655,10 @@ int runMathieu( const Perturb& perturb )
 		const double saturation = 150.0 * mode.gamma * mode.k * mode.k * size * size * c.seconds;
 		Check( steady && error < tolerance,
 		       fmt( "%-17s k=%6.1f (k_c %6.1f) a=%.3f m/s^2: |y| %.3e (expect %.3e), error %.2e of |y| (bound %.1e: "
-		            "truncation %.1e, %d substeps; saturation %.0e)",
+		            "truncation %.1e, %d substeps of psi %.2f; saturation %.0e)",
 		            c.what, mode.k, kc, accel, std::hypot( gotEta, gotRate / omega0 ), size, error, tolerance, truncation,
-		            substeps, saturation ) );
+		            substeps, std::sqrt( std::max( mode.omega2 - mode.gamma * mode.gamma, 0.0 ) ) * t / std::max( substeps, 1 ),
+		            saturation ) );
 	}
 	return Verdict();
 }
