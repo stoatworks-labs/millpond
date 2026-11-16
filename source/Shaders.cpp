@@ -625,6 +625,16 @@ uniform int Seed;                 //the shaken frame's number
 
 out vec4 fragColor;
 
+//exp( -z ) for z >= 0. Below 0.1 as its series (the seventh term is 2e-11):
+//Apple's software renderer's exp is good to about 1e-4, and a factor applied
+//to the state every frame compounds whatever error it has.
+float expNeg( float z )
+{
+	if( z < 0.1 )
+		return 1.0 + z * ( -1.0 + z * ( 0.5 + z * ( -1.0 / 6.0 + z * ( 1.0 / 24.0 + z * ( -1.0 / 120.0 + z * ( 1.0 / 720.0 ) ) ) ) ) );
+	return exp( -z );
+}
+
 uint mixBits( uint x )
 {
 	//lowbias32, as the caustic mesh's jitter: integer, the same on every machine.
@@ -646,7 +656,7 @@ void main()
 	//envelope can dip below zero where the kernel's notches take out more
 	//than the mean; a damping must not become a gain there.
 	float envelope = max( texelFetch( EnvelopeTexture, cell, 0 ).x, 0.0 );
-	float keep     = exp( -SatRate * envelope * Dt );
+	float keep     = expNeg( SatRate * envelope * Dt );
 	float eta      = state.x * keep;
 	float rate     = state.y * keep;
 
@@ -691,6 +701,14 @@ uniform float RateScale;
 
 out vec4 fragColor;
 
+//exp( -z ) for z >= 0, as the state pass has it: the series below 0.1.
+float expNeg( float z )
+{
+	if( z < 0.1 )
+		return 1.0 + z * ( -1.0 + z * ( 0.5 + z * ( -1.0 / 6.0 + z * ( 1.0 / 24.0 + z * ( -1.0 / 120.0 + z * ( 1.0 / 720.0 ) ) ) ) ) );
+	return exp( -z );
+}
+
 void main()
 {
 	ivec2 cell = ivec2( gl_FragCoord.xy );
@@ -732,10 +750,18 @@ void main()
 	//    E = [[d, h], [-h wbar - 2 gamma d, -2 gamma h - d]],  d = sqrt(3) h^2 ( w2 - w1 ) / 12
 	//with trace -2 gamma h and determinant h^2 wbar - d^2, and
 	//    exp( E ) = exp( -gamma h ) [ C I + S ( E + gamma h I ) ]
-	//with C, S from whichever side of critical damping it is on -- with no
-	//shake, exactly the evolve pass's step.
+	//with C = cos( psi ), S = sin( psi ) / psi, psi^2 the determinant less
+	//( gamma h )^2 -- cosh and sinh past critical damping. With no shake,
+	//exactly the evolve pass's step.
+	//
+	//Hundreds of substeps a frame compound any error in C, S and the decay,
+	//and Apple's software renderer's cos, sin and exp are good to about 2e-4
+	//(700 substeps of them missed the Mathieu solution by 15%). So for
+	//|psi| < 1 -- every mode near the lattice -- C and S are their series in
+	//psi^2, which hold on both sides of critical damping and need nothing
+	//transcendental (the sixth term is under 2e-9).
 	float h     = Step;
-	float decay = exp( -gamma * h );
+	float decay = expNeg( gamma * h );
 	float corr  = 0.144337567 * h * h;
 	vec2 eta    = A;
 	vec2 rate   = B;
@@ -750,7 +776,13 @@ void main()
 
 		float C;
 		float S;
-		if( disc > 0.0 )
+		if( abs( disc ) < 1.0 )
+		{
+			float x = disc;
+			C = decay * ( 1.0 + x * ( -1.0 / 2.0 + x * ( 1.0 / 24.0 + x * ( -1.0 / 720.0 + x * ( 1.0 / 40320.0 + x * ( -1.0 / 3628800.0 ) ) ) ) ) );
+			S = decay * ( 1.0 + x * ( -1.0 / 6.0 + x * ( 1.0 / 120.0 + x * ( -1.0 / 5040.0 + x * ( 1.0 / 362880.0 + x * ( -1.0 / 39916800.0 ) ) ) ) ) );
+		}
+		else if( disc > 0.0 )
 		{
 			float psi = sqrt( disc );
 			C         = decay * cos( psi );
@@ -758,21 +790,13 @@ void main()
 		}
 		else
 		{
-			float psi = sqrt( -disc );
-			if( psi < 1e-4 )
-			{
-				C = decay;
-				S = decay;
-			}
-			else
-			{
-				//cosh and sinh times the decay, so neither half overflows
-				//before the other can cancel it.
-				float slow = exp( psi - gamma * h );
-				float fast = exp( -psi - gamma * h );
-				C          = 0.5 * ( slow + fast );
-				S          = 0.5 * ( slow - fast ) / psi;
-			}
+			//cosh and sinh times the decay, so neither half overflows
+			//before the other can cancel it.
+			float psi  = sqrt( -disc );
+			float slow = exp( psi - gamma * h );
+			float fast = exp( -psi - gamma * h );
+			C          = 0.5 * ( slow + fast );
+			S          = 0.5 * ( slow - fast ) / psi;
 		}
 
 		vec2 etaNext  = C * eta + S * ( ( d + gamma * h ) * eta + h * rate );

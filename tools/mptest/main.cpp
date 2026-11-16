@@ -69,6 +69,8 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <csignal>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <functional>
@@ -134,6 +136,19 @@ struct Perturb
 	bool banksSwapped      = false;///< --banks expects Open to hold and Walls to lose
 	double stillSlack      = 0.0;///< --still adds this to the expected output
 	bool audioDeaf         = false;///< --audio expects no pebbles from the beat
+
+	// Faraday, for --faraday-negative.
+	double mathieuForcing  = 1.0;  ///< --mathieu expects this times the shake the plugin used
+	double onsetDamping    = 1.0;  ///< --onset expects the tongue of this times the damping
+	bool halfHarmonic      = false;///< --half expects the response at f, not f/2
+	double wavelengthOmega = 1.0;  ///< --wavelength expects the lattice of this times the drive
+	bool patternShift      = false;///< --pattern scores each run as the next pattern
+	bool strobeAsClock     = false;///< --strobe expects Slow Motion to be a slower clock
+	bool floatClock        = false;///< --clock: the plugin takes its phase from a float clock
+	bool resizeStill       = false;///< --resize presses Still on the resize frame
+	bool offShake          = false;///< --faraday-off sets Shake a hair above 0
+	int rateShift          = 0;    ///< --rate compares against the 60 fps water this many frames early
+	bool stateLeak         = false;///< --state-shaken leaves a texture bound on unit 2 after the frame
 };
 
 //---------------------------------------------------------------------------
@@ -331,8 +346,39 @@ Floats flatCard( int width, int height, float value )
 //---------------------------------------------------------------------------
 // GL plumbing.
 //---------------------------------------------------------------------------
+bool g_software = false;
+
 CGLContextObj createContext()
 {
+	//MPTEST_RENDERER=software asks for Apple's software renderer by id, as
+	//schlieren's sztest does: the second rasteriser every Faraday check is run
+	//on (honeydew: it gives different floats, so a cross-context bit-exact
+	//comparison is GPU-only). No fallback: a run that asked for it gets it.
+	const char* renderer = std::getenv( "MPTEST_RENDERER" );
+	if( renderer != nullptr && std::strcmp( renderer, "software" ) == 0 )
+	{
+		const CGLPixelFormatAttribute generic[] = {
+			kCGLPFAOpenGLProfile, static_cast< CGLPixelFormatAttribute >( kCGLOGLPVersion_GL4_Core ),
+			kCGLPFARendererID, static_cast< CGLPixelFormatAttribute >( kCGLRendererGenericFloatID ),
+			kCGLPFAColorSize, static_cast< CGLPixelFormatAttribute >( 24 ),
+			kCGLPFAAlphaSize, static_cast< CGLPixelFormatAttribute >( 8 ),
+			static_cast< CGLPixelFormatAttribute >( 0 )
+		};
+		CGLPixelFormatObj format = nullptr;
+		GLint formatCount        = 0;
+		if( CGLChoosePixelFormat( generic, &format, &formatCount ) != kCGLNoError || format == nullptr )
+			return nullptr;
+		CGLContextObj context = nullptr;
+		const CGLError error  = CGLCreateContext( format, nullptr, &context );
+		CGLDestroyPixelFormat( format );
+		if( error != kCGLNoError )
+			return nullptr;
+		CGLSetCurrentContext( context );
+		g_software = true;
+		std::fprintf( stderr, "mptest: MPTEST_RENDERER=software, Apple's software renderer\n" );
+		return context;
+	}
+
 	//Accelerated first; fall back so the harness still runs somewhere without
 	//a GPU, where it will at least prove the shaders compile.
 	const CGLPixelFormatAttribute accelerated[] = {
@@ -450,6 +496,11 @@ struct Rig
 	FFGLTextureStruct inputStruct  = {};
 	FFGLTextureStruct* inputs[ 1 ] = { nullptr };
 
+	/// Faraday's --clock: a host clock this far in, seconds.
+	double clockOffset = 0.0;
+	/// Faraday's --strobe: the host time of each frame, when given.
+	const std::vector< double >* clock = nullptr;
+
 	~Rig()
 	{
 		plugin.DeInitGL();
@@ -499,6 +550,30 @@ struct Rig
 		return true;
 	}
 
+	/// A new raster mid-run, as a host resizing the composition: a new input
+	/// and output at the new size, and the same plugin.
+	bool Resize( int w, int h )
+	{
+		glDeleteFramebuffers( 1, &outputFBO );
+		glDeleteTextures( 1, &outputTexture );
+		glDeleteTextures( 1, &sourceTexture );
+		width  = w;
+		height = h;
+		const Floats card = buildCard( width, height );
+		sourceTexture     = makeTexture( width, height, card.data() );
+		outputTexture     = makeTexture( width, height, nullptr );
+		glGenFramebuffers( 1, &outputFBO );
+		glBindFramebuffer( GL_FRAMEBUFFER, outputFBO );
+		glFramebufferTexture2D( GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, outputTexture, 0 );
+		if( glCheckFramebufferStatus( GL_FRAMEBUFFER ) != GL_FRAMEBUFFER_COMPLETE )
+			return false;
+		inputStruct.Width = inputStruct.HardwareWidth = static_cast< FFUInt32 >( width );
+		inputStruct.Height = inputStruct.HardwareHeight = static_cast< FFUInt32 >( height );
+		inputStruct.Handle                              = sourceTexture;
+		process.HostFBO                                 = outputFBO;
+		return true;
+	}
+
 	void Upload( const Floats& picture )
 	{
 		glBindTexture( GL_TEXTURE_2D, sourceTexture );
@@ -532,7 +607,9 @@ struct Rig
 	{
 		for( int i = 0; i < frames; ++i )
 		{
-			const double seconds = static_cast< double >( frame ) / fps;
+			const double seconds = clock && static_cast< size_t >( frame ) < clock->size()
+			                           ? ( *clock )[ static_cast< size_t >( frame ) ]
+			                           : clockOffset + static_cast< double >( frame ) / fps;
 			plugin.SetTime( seconds );
 			feedAudio( plugin, seconds, feed );
 			++frame;
@@ -2021,9 +2098,12 @@ int runAudio( const Perturb& perturb )
 //===========================================================================
 // --state
 //===========================================================================
-int runState( const Perturb& )
+int stateCheck( bool shaken, bool leak )
 {
-	std::printf( "\n=== state: what the host hands over is what it gets back\n" );
+	if( shaken )
+		std::printf( "\n=== state-shaken: shaken, what the host hands over is still what it gets back\n" );
+	else
+		std::printf( "\n=== state: what the host hands over is what it gets back\n" );
 
 	//A host-like context: a vertex array of its own bound, blending on with
 	//its own function, a clear colour, a scissor box, texture unit 3 active --
@@ -2031,7 +2111,16 @@ int runState( const Perturb& )
 	Rig rig;
 	if( !rig.Init( 320, 180 ) )
 		return 1;
+	if( shaken )
+	{
+		//Squares: every Faraday pass, the kernel's transforms included.
+		rig.Set( PT_SHAKE, 0.5f );
+		rig.Set( PT_PATTERN, static_cast< float >( Pattern::Squares ) );
+	}
 	GLuint hostArray = 0;
+	GLuint leaked    = 0;
+	if( leak )
+		leaked = makeTexture( 4, 4, nullptr );
 	glGenVertexArrays( 1, &hostArray );
 	int problems = 0;
 	std::string what;
@@ -2053,6 +2142,12 @@ int runState( const Perturb& )
 		rig.plugin.SetTime( frame / 60.0 );
 		if( rig.plugin.ProcessOpenGL( &rig.process ) != FF_SUCCESS )
 			return 1;
+		if( leak )
+		{
+			glActiveTexture( GL_TEXTURE2 );
+			glBindTexture( GL_TEXTURE_2D, leaked );
+			glActiveTexture( GL_TEXTURE0 );
+		}
 
 		GLint viewport[ 4 ] = {}, array = 0, program = 0, unit = 0, fbo = 0, src = 0, dst = 0;
 		GLfloat clear[ 4 ] = {};
@@ -2094,6 +2189,19 @@ int runState( const Perturb& )
 	glDisable( GL_BLEND );
 	glBindVertexArray( 0 );
 	glDeleteVertexArrays( 1, &hostArray );
+	if( leaked )
+	{
+		for( int u = 0; u < 8; ++u )
+		{
+			glActiveTexture( static_cast< GLenum >( GL_TEXTURE0 + u ) );
+			glBindTexture( GL_TEXTURE_2D, 0 );
+		}
+		glActiveTexture( GL_TEXTURE0 );
+		glDeleteTextures( 1, &leaked );
+	}
+	if( shaken )
+		Check( rig.plugin.FaradayActive() && rig.plugin.FaradaySteps() > 0,
+		       "the frames ran shaken: every Faraday pass, the kernel's transforms included" );
 
 	Check( problems == 0, fmt( "three frames: viewport, vertex array, program, active unit, framebuffer, blend, scissor, "
 	                           "clear colour and eight texture units all as the host left them (%d wrong:%s)",
@@ -2101,6 +2209,1268 @@ int runState( const Perturb& )
 	return Verdict();
 }
 
+
+//===========================================================================
+// --negative
+//===========================================================================
+int runState( const Perturb& )
+{
+	return stateCheck( false, false );
+}
+
+int runStateShaken( const Perturb& perturb )
+{
+	return stateCheck( true, perturb.stateLeak );
+}
+
+//===========================================================================
+// Faraday: the tank shaken up and down by the bass.
+//
+// The checks drive the real shaken passes through ProcessOpenGL and measure
+// the water they leave. Where a check needs the model's equation it writes
+// Benjamin & Ursell's (2.12) out again here, in double, with its own RK4 --
+// never the plugin's Magnus step, and never faraday::ThresholdAcceleration,
+// which is only the unit Shake is measured in.
+//
+// Every one of them runs at the raster `--size` gives (verify.sh: 320x180 and
+// 1280x720, and again on Apple's software renderer). The water lives on a grid
+// sized in metres, so the raster changes the caustic and output buffers and
+// nothing a check measures; running at two is what proves that.
+//===========================================================================
+int g_checkWidth  = 1280;
+int g_checkHeight = 720;
+
+/// Controls.cpp's kMaxOverdrive: Shake 1 is this many thresholds at full bass.
+constexpr double kShakeTop = 4.0;
+
+/// Everything a Faraday check depends on, set every time: a rig default can
+/// change what a check measures (honeydew's trap).
+struct ShakeSetup
+{
+	double pond      = 1.5; ///< frame height, m
+	int cells        = 512; ///< Detail
+	bool walls       = true;///< the whole periodic domain is pond: no sponge
+	double driveHz   = 10.0;
+	double damping   = 2.0; ///< the walls' rate, s^-1
+	double overdrive = 2.0; ///< thresholds at full bass
+	double slow      = 1.0;
+	int pattern      = static_cast< int >( Pattern::Stripes );
+	double speed     = 1.0;
+	bool seed        = true;
+};
+
+void applyShake( Rig& rig, const ShakeSetup& s )
+{
+	rig.Calm();
+	rig.Set( PT_CAUSTICS, 0.0f );
+	rig.Set( PT_POND_SIZE, pondParam( s.pond ) );
+	rig.Set( PT_DETAIL, detailParam( s.cells ) );
+	rig.Set( PT_BANKS, static_cast< float >( s.walls ? Banks::Walls : Banks::Open ) );
+	rig.Set( PT_DEPTH, depthParam( 0.3 ) );
+	rig.Set( PT_TENSION, tensionParam( kWaterTension ) );
+	rig.Set( PT_VISCOSITY, viscosityParam( 1e-6 ) );
+	rig.Set( PT_SPEED, ParamFromSpeed( static_cast< float >( s.speed ) ) );
+	rig.Set( PT_SHAKE, static_cast< float >( s.overdrive / kShakeTop ) );
+	rig.Set( PT_DRIVE, ParamFromDrive( static_cast< float >( s.driveHz ) ) );
+	rig.Set( PT_DAMPING, ParamFromDamping( static_cast< float >( s.damping ) ) );
+	rig.Set( PT_SLOW_MOTION, ParamFromSlowMotion( s.slow ) );
+	rig.Set( PT_PATTERN, static_cast< float >( s.pattern ) );
+	rig.Set( PT_BASS_BINS, ParamFromBassBins( 2 ) );
+	rig.plugin.SetSeedForTest( s.seed );
+	rig.feed = AudioFeed::Drone;
+}
+
+//---------------------------------------------------------------------------
+// Benjamin & Ursell (2.12), in double:
+//     eta'' + 2 gamma eta' + ( omega0^2 - a k tanh( k h ) cos theta ) eta = 0
+// with millpond's dispersion relation and Lamb's damping plus the walls'.
+//---------------------------------------------------------------------------
+struct MathieuMode
+{
+	double k       = 0.0;
+	double omega2  = 0.0;///< omega0^2
+	double gamma   = 0.0;
+	double perAccel = 0.0;///< k tanh( k h ): q per unit of shake acceleration
+};
+
+MathieuMode mathieuMode( double k, const Water& water, double walls )
+{
+	MathieuMode m;
+	const double t = std::tanh( std::min( k * water.depth, 20.0 ) );
+	m.k            = k;
+	m.omega2       = ( water.gravity * k + water.tension * k * k * k ) * t;
+	m.gamma        = 2.0 * water.viscosity * k * k + walls;
+	m.perAccel     = k * t;
+	return m;
+}
+
+/// The wavenumber whose free frequency is `omega`, by the harness's own
+/// bisection on the same dispersion relation.
+double dispersionWavenumber( double omega, const Water& water )
+{
+	double lo = 1e-3, hi = 1e6;
+	for( int i = 0; i < 200; ++i )
+	{
+		const double mid = std::sqrt( lo * hi );
+		if( std::sqrt( mathieuMode( mid, water, 0.0 ).omega2 ) < omega )
+			lo = mid;
+		else
+			hi = mid;
+	}
+	return std::sqrt( lo * hi );
+}
+
+/// RK4 over `dt` in `n` steps, from water time t0 with drive phase
+/// theta( t ) = theta0 + omegaDrive t.
+void mathieuRK4( const MathieuMode& m, double accel, double theta0, double omegaDrive, double t0, double dt, int n,
+                 double& eta, double& rate )
+{
+	const double q = accel * m.perAccel;
+	auto f         = [ & ]( double t, double e, double r, double& de, double& dr ) {
+        de = r;
+        dr = -2.0 * m.gamma * r - ( m.omega2 - q * std::cos( theta0 + omegaDrive * t ) ) * e;
+	};
+	const double h = dt / n;
+	double t       = t0;
+	for( int i = 0; i < n; ++i )
+	{
+		double k1e, k1r, k2e, k2r, k3e, k3r, k4e, k4r;
+		f( t, eta, rate, k1e, k1r );
+		f( t + 0.5 * h, eta + 0.5 * h * k1e, rate + 0.5 * h * k1r, k2e, k2r );
+		f( t + 0.5 * h, eta + 0.5 * h * k2e, rate + 0.5 * h * k2r, k3e, k3r );
+		f( t + h, eta + h * k3e, rate + h * k3r, k4e, k4r );
+		eta += h / 6.0 * ( k1e + 2.0 * k2e + 2.0 * k3e + k4e );
+		rate += h / 6.0 * ( k1r + 2.0 * k2r + 2.0 * k3r + k4r );
+		t += h;
+	}
+}
+
+/// The Floquet exponent (growth rate, 1/s) of the mode at this shake: the
+/// monodromy matrix over one drive period, by RK4 at 4000 steps.
+double floquetExponent( const MathieuMode& m, double accel, double omegaDrive )
+{
+	const double period = 2.0 * kPi / omegaDrive;
+	double e1 = 1.0, r1 = 0.0, e2 = 0.0, r2 = 1.0;
+	mathieuRK4( m, accel, 0.0, omegaDrive, 0.0, period, 4000, e1, r1 );
+	mathieuRK4( m, accel, 0.0, omegaDrive, 0.0, period, 4000, e2, r2 );
+	const double trace = e1 + r2;
+	const double det   = e1 * r2 - e2 * r1;
+	const double disc  = trace * trace - 4.0 * det;
+	double modulus;
+	if( disc >= 0.0 )
+		modulus = std::max( std::fabs( 0.5 * ( trace + std::sqrt( disc ) ) ), std::fabs( 0.5 * ( trace - std::sqrt( disc ) ) ) );
+	else
+		modulus = std::sqrt( det );
+	return std::log( modulus ) / period;
+}
+
+/// The exact first-tongue threshold for this mode: the shake at which its
+/// Floquet exponent crosses zero, by bisection.
+double floquetThreshold( const MathieuMode& m, double omegaDrive )
+{
+	double lo = 0.0, hi = 1.0;
+	while( floquetExponent( m, hi, omegaDrive ) < 0.0 && hi < 1e6 )
+		hi *= 2.0;
+	for( int i = 0; i < 60; ++i )
+	{
+		const double mid = 0.5 * ( lo + hi );
+		if( floquetExponent( m, mid, omegaDrive ) < 0.0 )
+			lo = mid;
+		else
+			hi = mid;
+	}
+	return 0.5 * ( lo + hi );
+}
+
+/// The grid's projection onto one standing mode cos( kx x + ky y ), for one
+/// channel of the surface.
+double projectMode( const Floats& s, const Grid& g, int mx, int my, int channel )
+{
+	const double kx = 2.0 * kPi * mx / g.lx, ky = 2.0 * kPi * my / g.ly;
+	double sum = 0.0, norm = 0.0;
+	for( int y = 0; y < g.ny; ++y )
+		for( int x = 0; x < g.nx; ++x )
+		{
+			const double px = ( x + 0.5 ) * g.lx / g.nx, py = ( y + 0.5 ) * g.ly / g.ny;
+			const double basis = std::cos( kx * px + ky * py );
+			sum += s[ ( static_cast< size_t >( y ) * g.nx + x ) * 4 + channel ] * basis;
+			norm += basis * basis;
+		}
+	return sum / norm;
+}
+
+Floats modeState( const Grid& g, int mx, int my, double amp )
+{
+	Floats state( static_cast< size_t >( g.nx ) * g.ny * 4, 0.0f );
+	const double kx = 2.0 * kPi * mx / g.lx, ky = 2.0 * kPi * my / g.ly;
+	for( int y = 0; y < g.ny; ++y )
+		for( int x = 0; x < g.nx; ++x )
+		{
+			const double px = ( x + 0.5 ) * g.lx / g.nx, py = ( y + 0.5 ) * g.ly / g.ny;
+			state[ ( static_cast< size_t >( y ) * g.nx + x ) * 4 ] = static_cast< float >( amp * std::cos( kx * px + ky * py ) );
+		}
+	return state;
+}
+
+/// eta's correlation between two surfaces: 1 for the same pattern, -1 for it
+/// upside down.
+double correlation( const Floats& a, const Floats& b )
+{
+	double ab = 0.0, aa = 0.0, bb = 0.0;
+	for( size_t i = 0; i < a.size(); i += 4 )
+	{
+		ab += static_cast< double >( a[ i ] ) * b[ i ];
+		aa += static_cast< double >( a[ i ] ) * a[ i ];
+		bb += static_cast< double >( b[ i ] ) * b[ i ];
+	}
+	return aa > 0.0 && bb > 0.0 ? ab / std::sqrt( aa * bb ) : 0.0;
+}
+
+/// The lattice's height, whatever phase of its oscillation the frame caught:
+/// the RMS of eta^2 + ( eta_t / omega_c )^2. eta's own RMS swings from zero
+/// to full every half response period (it cost a day: three Speeds gave three
+/// "saturated amplitudes" a factor of five apart, all the same lattice).
+double rmsAmplitude( const Floats& s, double omegaC )
+{
+	double sum = 0.0;
+	for( size_t i = 0; i < s.size(); i += 4 )
+	{
+		const double rate = kRateScale * static_cast< double >( s[ i + 1 ] ) / omegaC;
+		sum += static_cast< double >( s[ i ] ) * s[ i ] + rate * rate;
+	}
+	return std::sqrt( sum / static_cast< double >( s.size() / 4 ) );
+}
+
+/// The RMS of a - b over eta, relative to the RMS of a.
+double relativeDifference( const Floats& a, const Floats& b )
+{
+	double d = 0.0, n = 0.0;
+	for( size_t i = 0; i < a.size(); i += 4 )
+	{
+		const double e = static_cast< double >( a[ i ] ) - b[ i ];
+		d += e * e;
+		n += static_cast< double >( a[ i ] ) * a[ i ];
+	}
+	return n > 0.0 ? std::sqrt( d / n ) : ( d > 0.0 ? 1.0 : 0.0 );
+}
+
+bool requireShaken( Rig& rig, const char* what )
+{
+	//A negative control that makes the system fall back passes vacuously
+	//(dice): every measurement asserts that the shaken passes actually ran.
+	if( rig.plugin.FaradayActive() && rig.plugin.FaradaySteps() > 0 )
+		return true;
+	Check( false, fmt( "%s: the last frame did not run shaken (Faraday shaders missing?)", what ) );
+	return false;
+}
+
+//===========================================================================
+// --mathieu
+//===========================================================================
+int runMathieu( const Perturb& perturb )
+{
+	std::printf( "\n=== mathieu: one mode on the GPU follows Benjamin & Ursell's damped Mathieu equation\n" );
+
+	struct Case
+	{
+		const char* what;
+		double driveHz, pond, overdrive, detune;
+		double seconds;
+	};
+	const Case cases[] = {
+		{ "below threshold", 10.0, 1.5, 0.5, 0.0, 2.0 },
+		{ "twice threshold", 10.0, 1.5, 2.0, 0.0, 2.0 },
+		{ "4x, detuned 12%", 10.0, 1.5, 4.0, 0.12, 1.5 },
+		{ "capillary, 40 Hz", 40.0, 0.2, 2.0, 0.0, 1.0 },
+	};
+
+	for( const Case& c : cases )
+	{
+		Rig rig;
+		if( !rig.Init( g_checkWidth, g_checkHeight ) )
+			return 1;
+		ShakeSetup setup;
+		setup.pond      = c.pond;
+		setup.cells     = 256;
+		setup.driveHz   = c.driveHz;
+		setup.overdrive = 0.0;
+		setup.seed      = false;
+		applyShake( rig, setup );
+		if( !rig.Render( 1 ) )
+			return 1;
+
+		const Grid g      = rig.plugin.CurrentGrid();
+		const Water water = rig.plugin.CurrentWater();
+		const double omegaDrive = 2.0 * kPi * c.driveHz;
+		const double kc   = dispersionWavenumber( 0.5 * omegaDrive, water );
+		const int mx      = static_cast< int >( std::lround( kc * ( 1.0 + c.detune ) * g.lx / ( 2.0 * kPi ) ) );
+		const MathieuMode mode = mathieuMode( 2.0 * kPi * mx / g.lx, water, setup.damping );
+
+		//Small enough that the saturating damping is nothing beside the
+		//tolerance at the end of the run: start low by the growth expected.
+		const double growth = std::max( 0.0, ( c.overdrive - 1.0 ) * mode.gamma );
+		const double amp0   = 1e-6 * std::exp( -growth * c.seconds );
+		rig.plugin.LoadSurfaceForTest( modeState( g, mx, 0, amp0 ) );
+
+		setup.overdrive = c.overdrive;
+		applyShake( rig, setup );
+
+		double eta = amp0, rate = 0.0, t = 0.0, theta0 = 0.0, accel = 0.0, drive = omegaDrive;
+		int substeps = 0;
+		bool first = true, steady = true;
+		const int frames = static_cast< int >( std::lround( c.seconds * rig.fps ) );
+		for( int f = 0; f < frames; ++f )
+		{
+			if( !rig.Render( 1 ) || !requireShaken( rig, c.what ) )
+				return 1;
+			const double step = rig.plugin.FaradayWaterStep();
+			if( first )
+			{
+				//The drive the plugin was given, which is the control's float
+				//mapping of c.driveHz: a 1e-7 difference is 1e-5 rad by the end.
+				theta0 = rig.plugin.FaradayDrivePhase();
+				accel  = rig.plugin.FaradayAcceleration();
+				drive  = 2.0 * kPi * rig.plugin.FaradayDriveHz();
+				first  = false;
+			}
+			steady = steady && rig.plugin.FaradayAcceleration() == accel;
+			substeps += rig.plugin.FaradaySteps();
+			mathieuRK4( mode, accel * perturb.mathieuForcing, theta0, drive, t, step, 2000, eta, rate );
+			t += step;
+		}
+
+		const Floats back  = rig.Surface();
+		const double gotEta  = projectMode( back, g, mx, 0, 0 );
+		const double gotRate = projectMode( back, g, mx, 0, 1 ) * kRateScale;
+		const double omega0  = std::sqrt( mode.omega2 );
+		const double size    = std::hypot( eta, rate / omega0 );
+		const double error   = std::hypot( gotEta - eta, ( gotRate - rate ) / omega0 ) / size;
+
+		//The budget: fourth-order Magnus at 32 substeps a drive period is
+		//within 6e-5 of RK4 over these runs (measured in double, AGENTS.md);
+		//float rounding is at most a few ulp a substep, 16 x 6e-8 x the
+		//substeps. Nothing here is fitted to what this machine printed.
+		const double tolerance = 1e-4 + 16.0 * 6e-8 * substeps;
+		const double saturation = 150.0 * mode.gamma * mode.k * mode.k * size * size * c.seconds;
+		Check( steady && error < tolerance,
+		       fmt( "%-17s k=%6.1f (k_c %6.1f) a=%.3f m/s^2: |y| %.3e (expect %.3e), error %.2e of |y| (bound %.1e, "
+		            "%d substeps; saturation %.0e)",
+		            c.what, mode.k, kc, accel, std::hypot( gotEta, gotRate / omega0 ), size, error, tolerance, substeps,
+		            saturation ) );
+	}
+	return Verdict();
+}
+
+//===========================================================================
+// --onset
+//===========================================================================
+int runOnset( const Perturb& perturb )
+{
+	std::printf( "\n=== onset: the GPU's mode starts to grow where the damped Mathieu tongue says\n" );
+
+	struct Case
+	{
+		const char* what;
+		double driveHz, pond, damping;
+	};
+	const Case cases[] = {
+		{ "gravity, 10 Hz", 10.0, 1.5, 2.0 },
+		{ "capillary, 40 Hz", 40.0, 0.2, 0.5 },
+	};
+
+	for( const Case& c : cases )
+	{
+		//The grid's mode nearest k_c, driven at exactly twice its own
+		//frequency. Off resonance, below the tongue, the Floquet multipliers
+		//are a complex pair and a mode beats instead of decaying steadily, so
+		//two samples no longer measure a rate.
+		ShakeSetup setup;
+		setup.pond      = c.pond;
+		setup.cells     = 256;
+		setup.damping   = c.damping;
+		setup.overdrive = 0.0;
+		setup.seed      = false;
+		Grid g;
+		Water water;
+		{
+			Rig probe;
+			if( !probe.Init( g_checkWidth, g_checkHeight ) )
+				return 1;
+			setup.driveHz = c.driveHz;
+			applyShake( probe, setup );
+			if( !probe.Render( 1 ) )
+				return 1;
+			g     = probe.plugin.CurrentGrid();
+			water = probe.plugin.CurrentWater();
+		}
+		const int mx     = static_cast< int >( std::lround( dispersionWavenumber( kPi * c.driveHz, water ) * g.lx / ( 2.0 * kPi ) ) );
+		MathieuMode mode = mathieuMode( 2.0 * kPi * mx / g.lx, water, c.damping );
+		setup.driveHz    = std::sqrt( mode.omega2 ) / kPi;
+		double omegaDrive = 2.0 * kPi * setup.driveHz;
+
+		//One run at `overdrive` thresholds (the plugin's own unit): the
+		//shake it actually used, and the mode's growth rate measured from
+		//the surface. Frames three to a drive period, and samples a whole
+		//number of drive periods apart, so both see the same phase.
+		auto growthAt = [ & ]( double overdrive, double& accelUsed ) -> double {
+			Rig rig;
+			rig.fps = 3.0 * setup.driveHz;
+			if( !rig.Init( g_checkWidth, g_checkHeight ) )
+				return std::nan( "" );
+			setup.overdrive = 0.0;
+			applyShake( rig, setup );
+			if( !rig.Render( 1 ) )
+				return std::nan( "" );
+			rig.plugin.LoadSurfaceForTest( modeState( g, mx, 0, 1e-7 ) );
+			setup.overdrive = overdrive;
+			applyShake( rig, setup );
+
+			//The decaying Floquet solution goes 2 s0 faster than the growing
+			//one, and s0 is 0.9 gamma at the lower shake: 5 / gamma leaves
+			//e^-9 of it, a tenth of the --mathieu bound. (3.5 / gamma left
+			//e^-6.3, which showed as 6e-4/s on the lower rate.) Then two
+			//seconds of growth.
+			const int settle  = 6 * static_cast< int >( std::ceil( 5.0 / mode.gamma * rig.fps / 6.0 ) );
+			const int measure = 6 * static_cast< int >( std::ceil( 2.0 * rig.fps / 6.0 ) );
+			if( !rig.Render( settle ) || !requireShaken( rig, c.what ) )
+				return std::nan( "" );
+			accelUsed       = rig.plugin.FaradayAcceleration();
+			omegaDrive      = 2.0 * kPi * rig.plugin.FaradayDriveHz();
+			const double a  = projectMode( rig.Surface(), g, mx, 0, 0 );
+			const double t0 = rig.plugin.SimTime();
+			if( !rig.Render( measure ) )
+				return std::nan( "" );
+			const double b = projectMode( rig.Surface(), g, mx, 0, 0 );
+			return std::log( std::fabs( b / a ) ) / ( rig.plugin.SimTime() - t0 );
+		};
+
+		double aLow = 0.0, aHigh = 0.0;
+		const double lowRate  = growthAt( 0.9, aLow );
+		const double highRate = growthAt( 1.1, aHigh );
+		if( std::isnan( lowRate ) || std::isnan( highRate ) )
+			return 1;
+		const double measured = aLow + ( aHigh - aLow ) * ( -lowRate ) / ( highRate - lowRate );
+
+		//The exact tongue, from the monodromy matrix in double. The same
+		//straight-line interpolation through the exact rates at the same two
+		//shakes says how much the interpolation itself moves the onset.
+		MathieuMode expected = mode;
+		expected.gamma *= perturb.onsetDamping;
+		const double floquet   = floquetThreshold( expected, omegaDrive );
+		const double lowExact  = floquetExponent( expected, aLow, omegaDrive );
+		const double highExact = floquetExponent( expected, aHigh, omegaDrive );
+		const double straight  = aLow + ( aHigh - aLow ) * ( -lowExact ) / ( highExact - lowExact );
+		const double leading   = 4.0 * mode.gamma * std::sqrt( mode.omega2 ) / mode.perAccel;
+
+		//The bound: each amplitude to the --mathieu budget (1e-3 of itself),
+		//so each rate to 2e-3 / 2 s; through the slope of rate against shake
+		//that is the onset's; plus the interpolation's own bias.
+		const double slope = ( highExact - lowExact ) / ( aHigh - aLow );
+		const double bound = ( 2.0 * 1e-3 / 2.0 ) / slope / floquet + std::fabs( straight / floquet - 1.0 );
+		const double off   = measured / floquet - 1.0;
+		Check( std::fabs( off ) < bound,
+		       fmt( "%-16s k=%6.1f gamma=%.3f: growth %+.4f/s (exact %+.4f) at %.4f, %+.4f/s (exact %+.4f) at %.4f m/s^2 "
+		            "-> onset %.5f; tongue %.5f (%+.1e, bound %.1e); leading order %.5f",
+		            c.what, mode.k, mode.gamma, lowRate, lowExact, aLow, highRate, highExact, aHigh, measured, floquet,
+		            off, bound, leading ) );
+	}
+	return Verdict();
+}
+
+//---------------------------------------------------------------------------
+// Measuring a lattice. A radix-2 FFT with bit reversal for the analysis only
+// (--fft keeps its O(N^2) DFT, which shares no idea with the shader's).
+//---------------------------------------------------------------------------
+void fftLine( std::vector< Complex >& a, double sign )
+{
+	const size_t n = a.size();
+	for( size_t i = 1, j = 0; i < n; ++i )
+	{
+		size_t bit = n >> 1;
+		for( ; j & bit; bit >>= 1 )
+			j ^= bit;
+		j ^= bit;
+		if( i < j )
+			std::swap( a[ i ], a[ j ] );
+	}
+	for( size_t len = 2; len <= n; len <<= 1 )
+	{
+		const double angle = sign * 2.0 * kPi / static_cast< double >( len );
+		for( size_t i = 0; i < n; i += len )
+			for( size_t j = 0; j < len / 2; ++j )
+			{
+				const double c = std::cos( angle * j ), s = std::sin( angle * j );
+				const Complex u = a[ i + j ], v = a[ i + j + len / 2 ];
+				const Complex t = { v.first * c - v.second * s, v.first * s + v.second * c };
+				a[ i + j ]           = { u.first + t.first, u.second + t.second };
+				a[ i + j + len / 2 ] = { u.first - t.first, u.second - t.second };
+			}
+	}
+}
+
+/// |FFT|^2 of one channel (times `scale`) over a power-of-two block of the
+/// grid, Hann-windowed when asked. Returns nx * ny powers, natural order.
+std::vector< double > powerSpectrum( const Floats& s, const Grid& g, int x0, int y0, int nx, int ny, bool hann,
+                                     int channel = 0, double scale = 1.0 )
+{
+	std::vector< Complex > field( static_cast< size_t >( nx ) * ny );
+	for( int y = 0; y < ny; ++y )
+		for( int x = 0; x < nx; ++x )
+		{
+			const double w = hann ? ( 0.5 - 0.5 * std::cos( 2.0 * kPi * ( x + 0.5 ) / nx ) )
+			                            * ( 0.5 - 0.5 * std::cos( 2.0 * kPi * ( y + 0.5 ) / ny ) )
+			                      : 1.0;
+			field[ static_cast< size_t >( y ) * nx + x ] = {
+				w * scale * s[ ( static_cast< size_t >( y0 + y ) * g.nx + ( x0 + x ) ) * 4 + channel ], 0.0 };
+		}
+	std::vector< Complex > line( nx );
+	for( int y = 0; y < ny; ++y )
+	{
+		for( int x = 0; x < nx; ++x )
+			line[ x ] = field[ static_cast< size_t >( y ) * nx + x ];
+		fftLine( line, -1.0 );
+		for( int x = 0; x < nx; ++x )
+			field[ static_cast< size_t >( y ) * nx + x ] = line[ x ];
+	}
+	line.resize( ny );
+	for( int x = 0; x < nx; ++x )
+	{
+		for( int y = 0; y < ny; ++y )
+			line[ y ] = field[ static_cast< size_t >( y ) * nx + x ];
+		fftLine( line, -1.0 );
+		for( int y = 0; y < ny; ++y )
+			field[ static_cast< size_t >( y ) * nx + x ] = line[ y ];
+	}
+	std::vector< double > power( field.size() );
+	for( size_t i = 0; i < field.size(); ++i )
+		power[ i ] = field[ i ].first * field[ i ].first + field[ i ].second * field[ i ].second;
+	return power;
+}
+
+/// The power of eta plus that of eta_t / omega_c: for modes that share the
+/// lattice's oscillation, the same whatever phase of it the frame caught.
+std::vector< double > latticeSpectrum( const Floats& s, const Grid& g, int x0, int y0, int nx, int ny, bool hann,
+                                       double omegaC )
+{
+	std::vector< double > power = powerSpectrum( s, g, x0, y0, nx, ny, hann, 0, 1.0 );
+	const std::vector< double > rate = powerSpectrum( s, g, x0, y0, nx, ny, hann, 1, kRateScale / omegaC );
+	for( size_t i = 0; i < power.size(); ++i )
+		power[ i ] += rate[ i ];
+	return power;
+}
+
+//===========================================================================
+// --half
+//===========================================================================
+int runHalf( const Perturb& perturb )
+{
+	std::printf( "\n=== half: the lattice answers at exactly half the drive\n" );
+
+	//Three frames to a drive period: a response at f/2 is upside down three
+	//frames on and the same six frames on; one at f would be the same at three.
+	const double driveHz = 10.0;
+	Rig rig;
+	rig.fps = 3.0 * driveHz;
+	if( !rig.Init( g_checkWidth, g_checkHeight ) )
+		return 1;
+	ShakeSetup setup;
+	setup.cells     = 512;
+	setup.driveHz   = driveHz;
+	setup.overdrive = 3.0;
+	setup.pattern   = static_cast< int >( Pattern::Squares );
+	setup.speed     = 1.0;
+	applyShake( rig, setup );
+	if( !rig.Render( static_cast< int >( 6.0 * rig.fps ) ) || !requireShaken( rig, "half" ) )
+		return 1;
+
+	std::map< int, Floats > at;
+	for( int f = 0; f <= 60; ++f )
+	{
+		if( f == 0 || f == 3 || f == 6 || f == 60 )
+			at[ f ] = rig.Surface();
+		if( f < 60 && !rig.Render( 1 ) )
+			return 1;
+	}
+	const double rms   = rmsAmplitude( at[ 0 ], kPi * rig.plugin.FaradayDriveHz() );
+	const double one   = correlation( at[ 0 ], at[ 3 ] );
+	const double two   = correlation( at[ 0 ], at[ 6 ] );
+	const double twenty = correlation( at[ 0 ], at[ 60 ] );
+
+	//0.9 is cos( 0.45 rad ): twenty drive periods on, a response off f/2 by
+	//more than 0.036 Hz (0.7%) would have slipped that far. It also takes in
+	//the lattice's own slow change over two seconds, which is the only reason
+	//the numbers are not 1.
+	const double sign = perturb.halfHarmonic ? 1.0 : -1.0;
+	Check( rms > 1e-4, fmt( "the lattice stood up: RMS height %.2e m (a seed is about 1e-6)", rms ) );
+	Check( sign * one > 0.9, fmt( "one drive period on, the lattice is %s: correlation %+.4f (expect %s0.9)",
+	                               perturb.halfHarmonic ? "the same" : "upside down", one, perturb.halfHarmonic ? ">+" : "<-" ) );
+	Check( two > 0.9, fmt( "two drive periods on, it is back: correlation %+.4f (expect >+0.9)", two ) );
+	Check( twenty > 0.9, fmt( "twenty drive periods on, still in step -- f/2 to 0.7%%: correlation %+.4f (expect >+0.9)", twenty ) );
+	return Verdict();
+}
+
+//===========================================================================
+// --wavelength
+//===========================================================================
+int runWavelength( const Perturb& perturb )
+{
+	std::printf( "\n=== wavelength: the lattice's spacing is millpond's dispersion relation at f/2\n" );
+
+	const double driveHz = 30.0;
+	Rig rig;
+	rig.fps = 30.0;
+	if( !rig.Init( g_checkWidth, g_checkHeight ) )
+		return 1;
+	ShakeSetup setup;
+	setup.pond      = 0.5;
+	setup.cells     = 512;
+	setup.walls     = true;
+	setup.driveHz   = driveHz;
+	setup.overdrive = 1.5;
+	setup.pattern   = static_cast< int >( Pattern::Stripes );
+	setup.speed     = 2.0;
+	applyShake( rig, setup );
+	if( !rig.Render( static_cast< int >( 16.0 * rig.fps / setup.speed ) ) || !requireShaken( rig, "wavelength" ) )
+		return 1;
+
+	const Floats surface = rig.Surface();
+	const Grid g         = rig.plugin.CurrentGrid();
+	const Water water    = rig.plugin.CurrentWater();
+	const double accel   = rig.plugin.FaradayAcceleration();
+	const double omegaDrive = 2.0 * kPi * rig.plugin.FaradayDriveHz() * perturb.wavelengthOmega;
+	const double kDisp   = dispersionWavenumber( 0.5 * omegaDrive, water );
+
+	//Walls: the state is the mirrored pond, periodic, so the grid's own
+	//modes are exactly the spectrum -- no window. The lattice's wavenumber is
+	//the power-weighted mean |k| over the ring.
+	const std::vector< double > power = latticeSpectrum( surface, g, 0, 0, g.nx, g.ny, false, kPi * rig.plugin.FaradayDriveHz() );
+	double sum = 0.0, weighted = 0.0;
+	for( int y = 0; y < g.ny; ++y )
+		for( int x = 0; x < g.nx; ++x )
+		{
+			const int mx = x < g.nx / 2 ? x : x - g.nx, my = y < g.ny / 2 ? y : y - g.ny;
+			const double k = std::hypot( 2.0 * kPi * mx / g.lx, 2.0 * kPi * my / g.ly );
+			if( k < 0.6 * kDisp || k > 1.4 * kDisp )
+				continue;
+			const double p = power[ static_cast< size_t >( y ) * g.nx + x ];
+			sum += p;
+			weighted += p * k;
+		}
+	const double measured = weighted / sum;
+
+	//The band the lattice can be made of: every wavenumber whose damped
+	//Mathieu mode grows at this shake, by the exact Floquet exponent.
+	auto grows = [ & ]( double k ) { return floquetExponent( mathieuMode( k, water, setup.damping ), accel, omegaDrive ) > 0.0; };
+	auto edge  = [ & ]( double inside, double outside ) {
+        for( int i = 0; i < 40; ++i )
+        {
+            const double mid = 0.5 * ( inside + outside );
+            ( grows( mid ) ? inside : outside ) = mid;
+        }
+        return 0.5 * ( inside + outside );
+	};
+	double lo = kDisp, hi = kDisp;
+	if( grows( kDisp ) )
+	{
+		lo = edge( kDisp, 0.5 * kDisp );
+		hi = edge( kDisp, 1.5 * kDisp );
+	}
+	Check( measured >= lo && measured <= hi,
+	       fmt( "lattice k = %.2f rad/m (wavelength %.2f mm) against the dispersion relation's %.2f at f/2 (%+.2f%%); "
+	            "the growing band at %.3f m/s^2 is %.2f to %.2f (+-%.2f%%)",
+	            measured, 2000.0 * kPi / measured, kDisp, 100.0 * ( measured / kDisp - 1.0 ), accel, lo, hi,
+	            50.0 * ( hi - lo ) / kDisp ) );
+	return Verdict();
+}
+
+//===========================================================================
+// --pattern
+//===========================================================================
+struct LatticeSignature
+{
+	double single = 0.0;///< the slope's orientation coherence in a window, mean over windows: 1 stripes, 0 a lattice
+	double at60   = 0.0;///< the windows' angular autocorrelation at 60 degrees, the isotropic part removed
+	double at90   = 0.0;///< and at 90
+	double rms    = 0.0;
+};
+
+LatticeSignature signature( const Floats& s, const Grid& g, double kc, double omegaC, int window )
+{
+	//Windows over the frame -- the quadrant x < Nx/2, y < Ny/2, as Open
+	//banks leave it -- Hann-weighted, half-overlapping.
+	const int kWindow = window;
+	constexpr int kBins = 36;
+	LatticeSignature out;
+	int windows = 0;
+	for( int y0 = 0; y0 + kWindow <= g.ny / 2; y0 += kWindow / 2 )
+		for( int x0 = 0; x0 + kWindow <= g.nx / 2; x0 += kWindow / 2 )
+		{
+			const std::vector< double > power = latticeSpectrum( s, g, x0, y0, kWindow, kWindow, true, omegaC );
+			const double wx = g.lx / g.nx * kWindow, wy = g.ly / g.ny * kWindow;
+			std::vector< double > h( kBins, 0.0 );
+			for( int y = 0; y < kWindow; ++y )
+				for( int x = 0; x < kWindow; ++x )
+				{
+					const int mx = x < kWindow / 2 ? x : x - kWindow, my = y < kWindow / 2 ? y : y - kWindow;
+					const double kx = 2.0 * kPi * mx / wx, ky = 2.0 * kPi * my / wy;
+					const double k  = std::hypot( kx, ky );
+					if( k < 0.75 * kc || k > 1.25 * kc )
+						continue;
+					double angle = std::atan2( ky, kx );
+					if( angle < 0.0 )
+						angle += kPi;
+					const int bin = std::min( kBins - 1, static_cast< int >( angle / kPi * kBins ) );
+					h[ bin ] += power[ static_cast< size_t >( y ) * kWindow + x ];
+				}
+			double total = 0.0;
+			int peak     = 0;
+			for( int b = 0; b < kBins; ++b )
+			{
+				total += h[ b ];
+				if( h[ b ] > h[ peak ] )
+					peak = b;
+			}
+			if( total <= 0.0 )
+				continue;
+			//The slope's structure tensor, over each quarter of the window
+			//(five wavelengths or so: a labyrinth's stripes bend over ten):
+			//stripes have every gradient along one line (coherence 1); a
+			//square or hexagonal lattice's point every way equally (0).
+			const int half = kWindow / 2;
+			double near    = 0.0;
+			for( int qy = 0; qy < 2; ++qy )
+				for( int qx = 0; qx < 2; ++qx )
+				{
+					double jxx = 0.0, jyy = 0.0, jxy = 0.0;
+					for( int y = 0; y < half; ++y )
+						for( int x = 0; x < half; ++x )
+						{
+							const double w = ( 0.5 - 0.5 * std::cos( 2.0 * kPi * ( x + 0.5 ) / half ) )
+							                 * ( 0.5 - 0.5 * std::cos( 2.0 * kPi * ( y + 0.5 ) / half ) );
+							const int cx = x0 + qx * half + x, cy = y0 + qy * half + y;
+							const size_t i = ( static_cast< size_t >( cy ) * g.nx + cx ) * 4;
+							jxx += w * s[ i + 2 ] * s[ i + 2 ];
+							jyy += w * s[ i + 3 ] * s[ i + 3 ];
+							jxy += w * s[ i + 2 ] * s[ i + 3 ];
+
+							//And eta_t / omega_c's gradient, by central differences,
+							//so a frame that caught eta passing through zero still
+							//sees the lattice.
+							auto rateAt = [ & ]( int px, int py ) {
+								px = ( px + g.nx ) % g.nx;
+								py = ( py + g.ny ) % g.ny;
+								return kRateScale / omegaC * s[ ( static_cast< size_t >( py ) * g.nx + px ) * 4 + 1 ];
+							};
+							const double rx = ( rateAt( cx + 1, cy ) - rateAt( cx - 1, cy ) ) / ( 2.0 * g.lx / g.nx );
+							const double ry = ( rateAt( cx, cy + 1 ) - rateAt( cx, cy - 1 ) ) / ( 2.0 * g.ly / g.ny );
+							jxx += w * rx * rx;
+							jyy += w * ry * ry;
+							jxy += w * rx * ry;
+						}
+					near += 0.25 * ( jxx + jyy > 0.0 ? std::hypot( jxx - jyy, 2.0 * jxy ) / ( jxx + jyy ) : 0.0 );
+				}
+			(void)peak;
+
+			const double mean = total / kBins;
+			double self = 0.0, c60 = 0.0, c90 = 0.0;
+			for( int b = 0; b < kBins; ++b )
+			{
+				const double a = h[ b ] - mean;
+				self += a * a;
+				c60 += a * ( h[ ( b + kBins / 3 ) % kBins ] - mean );
+				c90 += a * ( h[ ( b + kBins / 2 ) % kBins ] - mean );
+			}
+			out.single += near;
+			out.at60 += self > 0.0 ? c60 / self : 0.0;
+			out.at90 += self > 0.0 ? c90 / self : 0.0;
+			++windows;
+		}
+	if( windows > 0 )
+	{
+		out.single /= windows;
+		out.at60 /= windows;
+		out.at90 /= windows;
+	}
+	out.rms = rmsAmplitude( s, omegaC );
+	return out;
+}
+
+int runPattern( const Perturb& perturb )
+{
+	std::printf( "\n=== pattern: Stripes, Squares and Hexagons stand up as themselves\n" );
+
+	//Forty seconds of water at twice threshold: a lattice orders slowly
+	//(at 14 s every Pattern was still mostly tangle and missed its test), and
+	//Speed 4 at 30 fps covers it in 300 frames a pattern. Windows of 64
+	//cells are ten wavelengths at 10 Hz on the 1.5 m pond.
+	const double driveHz = 10.0, seconds = 40.0, over = 2.0, speed = 4.0, fps = 30.0;
+	const int cells = 512, window = 64;
+
+	const char* const names[] = { "Stripes", "Squares", "Hexagons" };
+	for( int pattern = 0; pattern < 3; ++pattern )
+	{
+		Rig rig;
+		rig.fps = fps;
+		if( !rig.Init( g_checkWidth, g_checkHeight ) )
+			return 1;
+		ShakeSetup setup;
+		setup.cells     = cells;
+		setup.walls     = false;//mirror images would pair every stripe with its reflection
+		setup.driveHz   = driveHz;
+		setup.overdrive = over;
+		setup.pattern   = pattern;
+		setup.speed     = speed;
+		applyShake( rig, setup );
+		if( !rig.Render( static_cast< int >( seconds * rig.fps / setup.speed ) ) || !requireShaken( rig, names[ pattern ] ) )
+			return 1;
+
+		const double omegaC = kPi * rig.plugin.FaradayDriveHz();
+		const double kc     = dispersionWavenumber( omegaC, rig.plugin.CurrentWater() );
+		const LatticeSignature sig = signature( rig.Surface(), rig.plugin.CurrentGrid(), kc, omegaC, window );
+
+		//Each test is the midpoint between the perfect lattice and none:
+		//stripes' slopes all lie along one line (coherence 1), a square or
+		//hexagonal lattice's point every way (0); a perfect square lattice has
+		//angular autocorrelation 1 at 90 degrees, a hexagonal one 1 at 60,
+		//and a tangle with no order 0 at both.
+		const int expect = perturb.patternShift ? ( pattern + 1 ) % 3 : pattern;
+		bool ok          = sig.rms > 1e-4;
+		if( expect == 0 )
+			ok = ok && sig.single > 0.5;
+		else if( expect == 1 )
+			ok = ok && sig.single < 0.5 && sig.at90 > 0.5 && sig.at90 > sig.at60;
+		else
+			ok = ok && sig.single < 0.5 && sig.at60 > 0.5 && sig.at60 > sig.at90;
+		Check( ok, fmt( "%-8s (scored as %-8s): coherence %.2f, angular autocorrelation at 60 %+.2f, at 90 %+.2f; height %.2e m",
+		                names[ pattern ], names[ expect ], sig.single, sig.at60, sig.at90, sig.rms ) );
+	}
+	return Verdict();
+}
+
+//===========================================================================
+// --strobe
+//===========================================================================
+int runStrobe( const Perturb& perturb )
+{
+	std::printf( "\n=== strobe: Slow Motion shows the real-time water at the moments a stroboscope would\n" );
+
+	const double driveHz = 10.0, slow = 8.0;
+	const double omegaC  = kPi * driveHz;
+	const double rates[] = { 60.0, 24.0 };
+	for( const double fps : rates )
+	{
+		//B: the stroboscope. Seed off and one mode loaded, so a second run
+		//can be held against it exactly.
+		ShakeSetup setup;
+		setup.cells     = 256;
+		setup.driveHz   = driveHz;
+		setup.overdrive = 0.0;
+		setup.seed      = false;
+		setup.slow      = slow;
+
+		//The nominal clock is the host's times Speed -- the control's own
+		//float mapping of 1, which is 1 to a few parts in 1e8.
+		const double speed = SpeedFromParam( ParamFromSpeed( static_cast< float >( setup.speed ) ) );
+		std::vector< double > steps, nominal, lags, projections;
+		std::vector< double > feedTimes;
+		Floats strobed;
+		int mx = 0;
+		{
+			Rig rig;
+			rig.fps = fps;
+			if( !rig.Init( g_checkWidth, g_checkHeight ) )
+				return 1;
+			applyShake( rig, setup );
+			if( !rig.Render( 1 ) )
+				return 1;
+			const Grid g = rig.plugin.CurrentGrid();
+			mx = static_cast< int >( std::lround( dispersionWavenumber( omegaC, rig.plugin.CurrentWater() ) * g.lx / ( 2.0 * kPi ) ) );
+			rig.plugin.LoadSurfaceForTest( modeState( g, mx, 0, 1e-9 ) );
+			setup.overdrive = 2.0;
+			applyShake( rig, setup );
+			const int frames = static_cast< int >( 6.0 * fps );
+			for( int f = 1; f <= frames; ++f )
+			{
+				if( !rig.Render( 1 ) || !requireShaken( rig, "strobe" ) )
+					return 1;
+				steps.push_back( rig.plugin.FaradayWaterStep() );
+				nominal.push_back( f / fps * speed );
+				lags.push_back( rig.plugin.FaradayLag() );
+				projections.push_back( projectMode( rig.Surface(), g, mx, 0, 0 ) );
+			}
+			strobed = rig.Surface();
+		}
+
+		//The clock: never ahead of the nominal one, never a response period
+		//behind it, and the lag is exactly the difference between the two.
+		const double period = 2.0 * kPi / omegaC;
+		double water = 0.0, worstBook = 0.0, maxLag = 0.0, minLag = 1e9;
+		for( size_t i = 0; i < steps.size(); ++i )
+		{
+			water += steps[ i ];
+			worstBook = std::max( worstBook, std::fabs( nominal[ i ] - water - lags[ i ] ) );
+			maxLag    = std::max( maxLag, lags[ i ] );
+			minLag    = std::min( minLag, lags[ i ] );
+		}
+		Check( minLag >= 0.0 && maxLag < period && worstBook < 1e-9,
+		       fmt( "%2.0f fps: the water lags the clock by %.4f to %.4f s, inside one response period (%.4f s); "
+		            "bookkeeping to %.1e s",
+		            fps, minLag, maxLag, period, worstBook ) );
+
+		//What the camera sees: the oscillation, S times slower. The water's
+		//zeros are a drive period apart (eta( t + T ) = mu eta( t ), mu < 0),
+		//so the strobed picture's are S drive periods apart in nominal time.
+		//Each crossing is placed to within a frame; the mean spacing over
+		//N - 1 gaps to within two frames over N - 1.
+		std::vector< double > crossings;
+		for( size_t i = 1; i < projections.size(); ++i )
+			if( ( projections[ i ] > 0.0 ) != ( projections[ i - 1 ] > 0.0 ) )
+			{
+				const double a = projections[ i - 1 ], b = projections[ i ];
+				crossings.push_back( nominal[ i - 1 ] + ( nominal[ i ] - nominal[ i - 1 ] ) * a / ( a - b ) );
+			}
+		const double expected = ( perturb.strobeAsClock ? 1.0 : slow ) * kPi / omegaC;
+		const double spacing =
+			crossings.size() >= 2 ? ( crossings.back() - crossings.front() ) / static_cast< double >( crossings.size() - 1 ) : 0.0;
+		const double bound = crossings.size() >= 2 ? 2.0 / fps / static_cast< double >( crossings.size() - 1 ) : 0.0;
+		Check( crossings.size() >= 4 && std::fabs( spacing - expected ) < bound,
+		       fmt( "%2.0f fps: the picture's zeros are %.4f s apart over %zu crossings (expect %.4f, S = %.0f drive periods; "
+		            "bound %.4f)",
+		            fps, spacing, crossings.size(), expected, slow, bound ) );
+
+		//C: no stroboscope, on a host clock that steps exactly as B's water
+		//did. If Slow Motion only chooses moments of the same water, C ends
+		//on B's surface. (A slower clock -- schlieren's Speed -- would not.)
+		feedTimes.push_back( 0.0 );
+		double t = 0.0;
+		for( size_t i = 0; i < steps.size(); ++i )
+		{
+			t += perturb.strobeAsClock ? ( nominal[ i ] - ( i ? nominal[ i - 1 ] : 0.0 ) ) / slow : steps[ i ];
+			feedTimes.push_back( t );
+		}
+		Floats plain;
+		{
+			Rig rig;
+			rig.fps   = fps;
+			rig.clock = &feedTimes;
+			if( !rig.Init( g_checkWidth, g_checkHeight ) )
+				return 1;
+			setup.overdrive = 0.0;
+			setup.slow      = 1.0;
+			applyShake( rig, setup );
+			if( !rig.Render( 1 ) )
+				return 1;
+			rig.plugin.LoadSurfaceForTest( modeState( rig.plugin.CurrentGrid(), mx, 0, 1e-9 ) );
+			setup.overdrive = 2.0;
+			applyShake( rig, setup );
+			if( !rig.Render( static_cast< int >( steps.size() ) ) || !requireShaken( rig, "strobe" ) )
+				return 1;
+			plain = rig.Surface();
+		}
+		//The same water time in the same steps; the drive phases agree to
+		//double rounding. 1e-4 is the Magnus difference between two substep
+		//counts (< 6e-5 here) should a ceil() round the other way.
+		const double diff = relativeDifference( strobed, plain );
+		Check( diff < 1e-4, fmt( "%2.0f fps: the strobed water is the real-time water at the same moments: RMS difference "
+		                         "%.1e (bound 1e-4)",
+		                         fps, diff ) );
+	}
+	return Verdict();
+}
+
+//===========================================================================
+// --clock
+//===========================================================================
+int runClock( const Perturb& perturb )
+{
+	std::printf( "\n=== clock: at Resolume's 4.99e8 ms the shaken water is the water at 0\n" );
+
+	auto run = [ & ]( double offset, bool floatClock, Floats& out, double& phase ) {
+		Rig rig;
+		rig.clockOffset = offset;
+		if( !rig.Init( g_checkWidth, g_checkHeight ) )
+			return false;
+		ShakeSetup setup;
+		setup.cells     = 256;
+		setup.walls     = false;
+		setup.overdrive = 2.0;
+		setup.pattern   = static_cast< int >( Pattern::Squares );
+		applyShake( rig, setup );
+		rig.plugin.SetFloatClockForTest( floatClock );
+		if( !rig.Render( 120 ) || !requireShaken( rig, "clock" ) )
+			return false;
+		out   = rig.Surface();
+		phase = rig.plugin.FaradayDrivePhase();
+		return true;
+	};
+	Floats atZero, late;
+	double phaseZero = 0.0, phaseLate = 0.0;
+	if( !run( 0.0, false, atZero, phaseZero ) || !run( 499000.0, perturb.floatClock, late, phaseLate ) )
+		return 1;
+
+	//A double holds 499000 s to 6e-11 s, so each frame's dt is the same to
+	//that, and the drive's phase to 4e-9 rad: nothing a float uniform can
+	//see. 1e-4 of the RMS is room for a texel whose float rounds the other
+	//way; the phase is compared to 1e-6 rad.
+	const double diff = relativeDifference( atZero, late );
+	Check( diff < 1e-4 && std::fabs( phaseZero - phaseLate ) < 1e-6,
+	       fmt( "RMS difference %.1e (bound 1e-4); drive phase %.9f against %.9f rad", diff, phaseLate, phaseZero ) );
+	return Verdict();
+}
+
+//===========================================================================
+// --resize
+//===========================================================================
+int runResize( const Perturb& perturb )
+{
+	std::printf( "\n=== resize: a raster change mid-run keeps the shaken water\n" );
+
+	const int w = g_checkWidth, h = g_checkHeight;
+	const int w2 = w >= 640 ? w / 2 : w * 2, h2 = w >= 640 ? h / 2 : h * 2;
+	auto run = [ & ]( bool resize, Floats& out, double& lag ) {
+		Rig rig;
+		if( !rig.Init( w, h ) )
+			return false;
+		ShakeSetup setup;
+		setup.cells     = 256;
+		setup.walls     = false;
+		setup.overdrive = 2.0;
+		setup.slow      = 4.0;//so the stroboscope's state is carried across too
+		setup.pattern   = static_cast< int >( Pattern::Squares );
+		applyShake( rig, setup );
+		if( !rig.Render( 60 ) )
+			return false;
+		if( resize )
+		{
+			if( perturb.resizeStill )
+				rig.Press( PT_STILL );
+			if( !rig.Resize( w2, h2 ) )
+				return false;
+		}
+		if( !rig.Render( 60 ) || !requireShaken( rig, "resize" ) )
+			return false;
+		out = rig.Surface();
+		lag = rig.plugin.FaradayLag();
+		return true;
+	};
+	Floats resized, kept;
+	double lagResized = 0.0, lagKept = 0.0;
+	if( !run( true, resized, lagResized ) || !run( false, kept, lagKept ) )
+		return 1;
+
+	//The same context, the same passes, the same inputs: the water never
+	//reads the raster, so the two runs must agree bit for bit.
+	size_t differ = 0;
+	for( size_t i = 0; i < resized.size(); ++i )
+		differ += std::memcmp( &resized[ i ], &kept[ i ], sizeof( float ) ) != 0;
+	Check( differ == 0 && lagResized == lagKept,
+	       fmt( "%dx%d to %dx%d after one second: %zu of %zu surface floats differ from a run that never resized; "
+	            "strobe lag %.6f against %.6f",
+	            w, h, w2, h2, differ, resized.size(), lagResized, lagKept ) );
+	return Verdict();
+}
+
+//===========================================================================
+// --faraday-off
+//===========================================================================
+int runFaradayOff( const Perturb& perturb )
+{
+	std::printf( "\n=== faraday-off: at Shake 0 the other five Faraday controls change nothing\n" );
+
+	auto run = [ & ]( bool tweak, Floats& out, Floats& surface, bool& shaken ) {
+		Rig rig;
+		if( !rig.Init( g_checkWidth, g_checkHeight ) )
+			return false;
+		rig.feed = AudioFeed::Pulses;
+		rig.Set( PT_RAIN, 0.45f );
+		rig.Set( PT_AUDIO_PEBBLES, 0.5f );
+		if( tweak )
+		{
+			rig.Set( PT_DRIVE, 1.0f );
+			rig.Set( PT_DAMPING, 0.0f );
+			rig.Set( PT_SLOW_MOTION, 1.0f );
+			rig.Set( PT_PATTERN, 2.0f );
+			rig.Set( PT_BASS_BINS, 1.0f );
+			rig.Set( PT_SHAKE, perturb.offShake ? 1e-3f : 0.0f );
+		}
+		for( int f = 0; f < 90; ++f )
+		{
+			if( f == 10 )
+				rig.Press( PT_DROP );
+			if( f == 20 )
+				rig.Press( PT_SKIM );
+			if( !rig.Render( 1 ) )
+				return false;
+		}
+		out     = rig.Output();
+		surface = rig.Surface();
+		shaken  = rig.plugin.FaradayActive();
+		return true;
+	};
+	Floats outA, surfA, outB, surfB;
+	bool shakenA = false, shakenB = false;
+	if( !run( false, outA, surfA, shakenA ) || !run( true, outB, surfB, shakenB ) )
+		return 1;
+
+	//Same context: bit for bit, nothing less.
+	size_t differ = 0;
+	for( size_t i = 0; i < outA.size(); ++i )
+		differ += std::memcmp( &outA[ i ], &outB[ i ], sizeof( float ) ) != 0;
+	for( size_t i = 0; i < surfA.size(); ++i )
+		differ += std::memcmp( &surfA[ i ], &surfB[ i ], sizeof( float ) ) != 0;
+	Check( differ == 0 && !shakenA && !shakenB,
+	       fmt( "rain, a drop, a skim and audio pebbles for 90 frames with Drive, Damping, Slow Motion, Pattern and Bass "
+	            "Bins at their far ends: %zu of %zu output and surface floats differ%s",
+	            differ, outA.size() + surfA.size(), shakenB ? " (and a frame ran shaken)" : "" ) );
+	return Verdict();
+}
+
+//===========================================================================
+// --rate
+//===========================================================================
+int runRate( const Perturb& perturb )
+{
+	std::printf( "\n=== rate: the shaken water is the same at 60 and 30 fps\n" );
+
+	auto run = [ & ]( double fps, int frames, Floats& out, int& substeps ) {
+		Rig rig;
+		rig.fps = fps;
+		if( !rig.Init( g_checkWidth, g_checkHeight ) )
+			return false;
+		ShakeSetup setup;
+		setup.cells     = 256;
+		setup.overdrive = 0.0;
+		setup.seed      = false;
+		applyShake( rig, setup );
+		if( !rig.Render( 1 ) )
+			return false;
+		const Grid g = rig.plugin.CurrentGrid();
+		const int mx = static_cast< int >(
+			std::lround( dispersionWavenumber( kPi * setup.driveHz, rig.plugin.CurrentWater() ) * g.lx / ( 2.0 * kPi ) ) );
+		Floats state = modeState( g, mx, 0, 1e-9 );
+		const Floats other = modeState( g, mx - 4, 3, 6e-10 );
+		for( size_t i = 0; i < state.size(); ++i )
+			state[ i ] += other[ i ];
+		rig.plugin.LoadSurfaceForTest( state );
+		setup.overdrive = 2.0;
+		applyShake( rig, setup );
+		substeps = 0;
+		for( int f = 0; f < frames; ++f )
+		{
+			if( !rig.Render( 1 ) || !requireShaken( rig, "rate" ) )
+				return false;
+			substeps += rig.plugin.FaradaySteps();
+		}
+		out = rig.Surface();
+		return true;
+	};
+	Floats sixty, thirty;
+	int stepsSixty = 0, stepsThirty = 0;
+	if( !run( 60.0, 120 - perturb.rateShift, sixty, stepsSixty ) || !run( 30.0, 60, thirty, stepsThirty ) )
+		return 1;
+
+	//Each run is within the --mathieu budget of the true solution, so they
+	//are within the sum of the two budgets of each other.
+	const double bound = 2.0 * 1e-4 + 16.0 * 6e-8 * ( stepsSixty + stepsThirty );
+	const double diff  = relativeDifference( sixty, thirty );
+	Check( diff < bound, fmt( "two seconds of two shaken modes: RMS difference %.2e (bound %.1e; %d and %d substeps)", diff,
+	                          bound, stepsSixty, stepsThirty ) );
+	return Verdict();
+}
+
+//===========================================================================
+// --faraday-negative: every Faraday check, against a wrong model, must fail.
+// Kept apart from --negative so that one's output is v0.1.0's, unchanged.
+//===========================================================================
+int runFaradayNegative()
+{
+	struct Case
+	{
+		const char* name;
+		int ( *check )( const Perturb& );
+		Perturb perturb;
+		const char* what;
+	};
+	std::vector< Case > cases;
+	{
+		Perturb p;
+		p.mathieuForcing = 1.01;
+		cases.push_back( { "mathieu", runMathieu, p, "expect the shake 1% stronger than the plugin used" } );
+	}
+	{
+		Perturb p;
+		p.onsetDamping = 1.05;
+		cases.push_back( { "onset", runOnset, p, "expect the tongue of a mode damped 5% more" } );
+	}
+	{
+		Perturb p;
+		p.halfHarmonic = true;
+		cases.push_back( { "half", runHalf, p, "expect the response at the drive frequency, not half" } );
+	}
+	{
+		Perturb p;
+		p.wavelengthOmega = 1.06;
+		cases.push_back( { "wavelength", runWavelength, p, "expect the lattice of a drive 6% faster" } );
+	}
+	{
+		Perturb p;
+		p.patternShift = true;
+		cases.push_back( { "pattern", runPattern, p, "score Stripes as Squares, Squares as Hexagons, Hexagons as Stripes" } );
+	}
+	{
+		Perturb p;
+		p.strobeAsClock = true;
+		cases.push_back( { "strobe", runStrobe, p, "expect Slow Motion to be a slower clock, and the picture unslowed" } );
+	}
+	{
+		Perturb p;
+		p.floatClock = true;
+		cases.push_back( { "clock", runClock, p, "the plugin takes the drive's phase from the host clock as a float" } );
+	}
+	{
+		Perturb p;
+		p.resizeStill = true;
+		cases.push_back( { "resize", runResize, p, "the resize frame clears the water" } );
+	}
+	{
+		Perturb p;
+		p.offShake = true;
+		cases.push_back( { "faraday-off", runFaradayOff, p, "Shake a hair above 0" } );
+	}
+	{
+		Perturb p;
+		p.rateShift = 1;
+		cases.push_back( { "rate", runRate, p, "hold the 30 fps water against the 60 fps water a frame earlier" } );
+	}
+	{
+		Perturb p;
+		p.stateLeak = true;
+		cases.push_back( { "state-shaken", runStateShaken, p, "the host's view after the frame has a texture left on unit 2" } );
+	}
+
+	int unfalsifiable = 0;
+	for( const Case& c : cases )
+	{
+		std::printf( "\n=== negative control: %s -- %s\n", c.name, c.what );
+		const int before = g_failures;
+		g_failures       = 0;
+		c.check( c.perturb );
+		const int observed = g_failures;
+		g_failures         = before;
+
+		if( observed > 0 )
+			std::printf( "  ok    %s failed %d check%s, as it must\n", c.name, observed, observed == 1 ? "" : "s" );
+		else
+		{
+			std::printf( "  FAIL  %s PASSED against a wrong model -- it cannot fail, so it is not a check\n", c.name );
+			++unfalsifiable;
+		}
+	}
+
+	std::printf( "\nFaraday negative controls: %zu perturbations, %d of them undetected\n", cases.size(), unfalsifiable );
+	std::printf( "\n  %s\n", unfalsifiable == 0 ? "PASS" : "FAIL" );
+	return unfalsifiable == 0 ? 0 : 1;
+}
 
 //===========================================================================
 // --negative
@@ -2552,7 +3922,10 @@ int main( int argc, char** argv )
 				"  --script PATH     parameter cues for --pipe/--film: 'frame Name value'\n"
 				"  --fps N           the clock for --pipe/--film (default 60)\n\n"
 				"  --fft --modes --gravity --quiet --shallow --banks --refraction --fresnel\n"
-				"  --caustics --still --skim-check --rain --audio --state --negative --bench\n" );
+				"  --caustics --still --skim-check --rain --audio --state --negative --bench\n\n"
+				"  Faraday, at the raster --size gives (MPTEST_RENDERER=software for Apple's software renderer):\n"
+				"  --mathieu --onset --half --wavelength --pattern --strobe --clock --resize\n"
+				"  --faraday-off --rate --state-shaken --faraday-negative\n" );
 			return 0;
 		}
 		else if( argument == "--out" && hasNext )
@@ -2596,7 +3969,10 @@ int main( int argc, char** argv )
 		         || argument == "--shallow" || argument == "--banks" || argument == "--refraction"
 		         || argument == "--fresnel" || argument == "--caustics" || argument == "--still"
 		         || argument == "--rain" || argument == "--audio" || argument == "--negative" || argument == "--bench"
-		         || argument == "--state" )
+		         || argument == "--state" || argument == "--mathieu" || argument == "--onset" || argument == "--half"
+		         || argument == "--wavelength" || argument == "--pattern" || argument == "--strobe"
+		         || argument == "--clock" || argument == "--resize" || argument == "--faraday-off"
+		         || argument == "--rate" || argument == "--state-shaken" || argument == "--faraday-negative" )
 			mode = argument.substr( 2 );
 		else if( argument == "--size" && hasNext )
 		{
@@ -2652,7 +4028,15 @@ int main( int argc, char** argv )
 		{ "refraction", runRefraction }, { "fresnel", runFresnel }, { "caustics", runCaustics },
 		{ "still", runStill },     { "skim", runSkim },         { "rain", runRain },
 		{ "audio", runAudio },       { "state", runState },
+		{ "mathieu", runMathieu },   { "onset", runOnset },       { "half", runHalf },
+		{ "wavelength", runWavelength }, { "pattern", runPattern }, { "strobe", runStrobe },
+		{ "clock", runClock },       { "resize", runResize },     { "faraday-off", runFaradayOff },
+		{ "rate", runRate },         { "state-shaken", runStateShaken },
 	};
+
+	//The Faraday checks run at the raster --size gives.
+	g_checkWidth  = width;
+	g_checkHeight = height;
 
 	bool ran = false;
 	for( const auto& check : checks )
@@ -2663,9 +4047,17 @@ int main( int argc, char** argv )
 		}
 
 	if( !ran && mode == "pipe" )
+	{
+		//A reader that stops early (`| head -c 1`) must end the run with a
+		//failed write and exit 1, not kill it with SIGPIPE (141): the second
+		//is indistinguishable from a crash to whatever is filming.
+		std::signal( SIGPIPE, SIG_IGN );
 		result = runPipe( width, height, scriptPath, filmFrames, beat, settings, fps );
+	}
 	else if( !ran && mode == "negative" )
 		result = runNegative();
+	else if( !ran && mode == "faraday-negative" )
+		result = runFaradayNegative();
 	else if( !ran && mode == "bench" )
 		result = runBench();
 	else if( !ran )
