@@ -20,6 +20,12 @@ second into the Audio buffer. An entry whose absence changes nothing is worse
 than no entry: it makes the sweep look more careful than it is, so the table
 was checked by emptying it: all eleven go dead without it.
 
+The Faraday six need the tank shaken and something in the bass. Shake itself
+needs only the bass (a steady drone); the other five need Shake up as well,
+and Bass Bins needs a feed whose lowest bins move differently from the rest
+(a kick under a steady pad) -- on a drone every bin count normalises to the
+same level. Those were checked by emptying them too: see AGENTS.md.
+
 Everything else is live on the base render, which is the plugin's own defaults
 plus a harder rain -- ripples everywhere, so the light, the banks, the depth
 and the constants all have water to act on.
@@ -47,6 +53,9 @@ BASE = ["Rain=0.45"]
 DROP = ["--drop", "20"]
 SKIM = ["--skim", "20"]
 BEAT = ["--beat"]
+DRONE = ["--drone"]
+SHAKEN = ["--drone", "--set", "Shake=1"]
+KICKED = ["--kick", "--set", "Shake=1"]
 CONTEXT = {
     "Pebble X": DROP,
     "Pebble Y": DROP,
@@ -59,6 +68,12 @@ CONTEXT = {
     "Bounces": SKIM,
     "Audio Pebbles": BEAT,
     "Audio Rain": BEAT,
+    "Shake": DRONE,
+    "Drive": SHAKEN,
+    "Damping": SHAKEN,
+    "Slow Motion": SHAKEN,
+    "Pattern": SHAKEN,
+    "Bass Bins": KICKED,
 }
 
 # The values every non-option parameter is swept across. The awkward numbers
@@ -75,6 +90,7 @@ OPTION_RANGE = {
     "Banks": 2,
     "Detail": 4,
     "View": 4,
+    "Pattern": 3,
 }
 
 # Parameter kinds with no scalar worth sweeping.
@@ -133,15 +149,24 @@ def parameters(harness):
         name = " ".join(parts[1:-2])
         found.append((name, kind))
 
-    # The About block -- a text line then one browser button per link -- is
-    # declared last and never touches a pixel, so sweeping it only buries a
-    # real dead control. Truncating at "About" rather than naming each button
-    # keeps this right as links are added; publishing a user guide adds one.
-    for index, (entry_name, _kind) in enumerate(found):
+    # The About block -- a text line then one browser button per link -- never
+    # touches a pixel, so sweeping it only buries a real dead control. It is
+    # dropped as "About" and the events straight after it, rather than by
+    # naming each button, so this stays right as links are added (publishing
+    # a user guide adds one). It is NOT the end of the list: the Faraday
+    # controls were appended after it, so v0.1.0's ids stay where they were.
+    kept = []
+    in_about = False
+    for entry_name, kind in found:
         if entry_name == "About":
-            return found[:index]
+            in_about = True
+            continue
+        if in_about and kind == "event":
+            continue
+        in_about = False
+        kept.append((entry_name, kind))
 
-    return found
+    return kept
 
 
 def main():

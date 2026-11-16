@@ -35,13 +35,16 @@ constexpr int kMaxSteps       = 1024;
 /// at full Shake stands at a steepness k A of about 0.2.
 constexpr double kSaturation = 150.0;
 
-/// The ambient disturbance the pattern grows from: a white field whose RMS a
-/// cell, over a frame of dt seconds, is kSeed sqrt( dt / cell area ). A Wiener
-/// process in time, so the noise put in per second does not depend on the
-/// frame rate; normalised by the cell's area, so the noise each Fourier mode
-/// gets does not depend on Detail. At the default pond that is about 2e-6 m
-/// a cell over a second: far below anything the picture shows.
-constexpr double kSeed = 1e-8;
+/// The ambient disturbance the pattern grows from. Each Fourier mode gets what
+/// a white field whose RMS a cell, over a frame of dt seconds, is
+/// kSeed sqrt( dt / cell area ) would give it -- times a Gaussian band around
+/// k_c, kSeedWidth k_c wide. A Wiener process in time, so the noise put in per
+/// second does not depend on the frame rate; normalised by the cell's area, so
+/// a mode's share does not depend on Detail; banded, because white out to the
+/// grid's scale it was visible (up to 19 of 255 levels of caustic sparkle at
+/// full Shake in silence) while only the modes near k_c need it.
+constexpr double kSeed     = 1e-8;
+constexpr float kSeedWidth = 0.25f;
 
 /// The width (one standard deviation) of the pattern kernel's notches, as a
 /// fraction of k_c. Wide enough to keep catching the lattice's pairs when the

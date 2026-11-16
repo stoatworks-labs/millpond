@@ -237,7 +237,6 @@ private:
 		double gammaC      = 0.0;///< the linear damping at k_c, 1/s
 		double walls       = 0.0;///< Damping, 1/s
 		double satRate     = 0.0;///< beta, 1 / ( m^2 s )
-		double seedAmp     = 0.0;///< m
 		double waterStep   = 0.0;///< s
 		double theta0      = 0.0;///< the drive's phase at the frame's start
 		int steps          = 0;
@@ -246,9 +245,9 @@ private:
 
 	void Simulate( const std::vector< Impact >& impacts, double dt, const Shaken* shaken );
 
-	/// The envelope and the saturated, seeded state: passes a to e (Shaders.h).
+	/// The envelope and the saturated state: passes a to e (Shaders.h).
 	/// Returns the texture the inject pass should read as its state.
-	GLuint ShakeState( const Shaken& shaken, double dt, int walls );
+	GLuint ShakeState( const Shaken& shaken, double dt );
 
 	/// The Faraday buffers, allocated up front like every other.
 	bool ensureFaraday();

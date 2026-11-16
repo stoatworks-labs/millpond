@@ -610,18 +610,14 @@ void main()
 )";
 
 //---------------------------------------------------------------------------
-// e. The state the inject pass reads: saturated, and seeded.
+// e. The state the inject pass reads: saturated.
 //---------------------------------------------------------------------------
 const char* const kFaradayStateShader = R"(#version 410 core
 
 uniform sampler2D StateTexture;   //(eta, eta_t / RateScale, eta_x, eta_y)
 uniform sampler2D EnvelopeTexture;//K * A~^2, m^2, in .x
-uniform ivec2 GridSize;
-uniform int Walls;
 uniform float SatRate;            //beta, 1 / ( m^2 s )
 uniform float Dt;                 //seconds of water this frame
-uniform float SeedAmp;            //this frame's ambient noise, metres RMS a cell
-uniform int Seed;                 //the shaken frame's number
 
 out vec4 fragColor;
 
@@ -635,17 +631,6 @@ float expNeg( float z )
 	return exp( -z );
 }
 
-uint mixBits( uint x )
-{
-	//lowbias32, as the caustic mesh's jitter: integer, the same on every machine.
-	x ^= x >> 16u;
-	x *= 0x7feb352du;
-	x ^= x >> 15u;
-	x *= 0x846ca68bu;
-	x ^= x >> 16u;
-	return x;
-}
-
 void main()
 {
 	ivec2 cell = ivec2( gl_FragCoord.xy );
@@ -657,25 +642,7 @@ void main()
 	//than the mean; a damping must not become a gain there.
 	float envelope = max( texelFetch( EnvelopeTexture, cell, 0 ).x, 0.0 );
 	float keep     = expNeg( SatRate * envelope * Dt );
-	float eta      = state.x * keep;
-	float rate     = state.y * keep;
-
-	//The seed: white in space, so it chooses neither the wavelength nor the
-	//orientation. With Walls every cell takes its mirror images' number, or
-	//the method of images would no longer hold.
-	ivec2 at = cell;
-	if( Walls != 0 )
-	{
-		if( at.x >= GridSize.x / 2 )
-			at.x = GridSize.x - 1 - at.x;
-		if( at.y >= GridSize.y / 2 )
-			at.y = GridSize.y - 1 - at.y;
-	}
-	uint h  = mixBits( ( uint( at.x ) * 0x9e3779b9u ) ^ mixBits( ( uint( at.y ) + 0x632be5abu ) ^ mixBits( uint( Seed ) ) ) );
-	float u = ( float( h >> 8u ) + 0.5 ) / 16777216.0;
-	eta += SeedAmp * 1.73205081 * ( 2.0 * u - 1.0 );
-
-	fragColor = vec4( eta, rate, 0.0, 0.0 );
+	fragColor      = vec4( state.x * keep, state.y * keep, 0.0, 0.0 );
 }
 )";
 
@@ -698,6 +665,11 @@ uniform float Step;          //the substep, s
 uniform int Steps;
 uniform float Norm;
 uniform float RateScale;
+uniform float Wavenumber;    //k_c, rad/m: where the seed goes
+uniform float SeedWidth;     //the seed's band, one standard deviation, as a fraction of k_c
+uniform float SeedAmp;       //this frame's seed at k_c: metres RMS a cell, were it white
+uniform int Seed;            //the shaken frame's number
+uniform int Walls;
 
 out vec4 fragColor;
 
@@ -707,6 +679,25 @@ float expNeg( float z )
 	if( z < 0.1 )
 		return 1.0 + z * ( -1.0 + z * ( 0.5 + z * ( -1.0 / 6.0 + z * ( 1.0 / 24.0 + z * ( -1.0 / 120.0 + z * ( 1.0 / 720.0 ) ) ) ) ) );
 	return exp( -z );
+}
+
+uint mixBits( uint x )
+{
+	//lowbias32, as the caustic mesh's jitter: integer, the same on every machine.
+	x ^= x >> 16u;
+	x *= 0x7feb352du;
+	x ^= x >> 15u;
+	x *= 0x846ca68bu;
+	x ^= x >> 16u;
+	return x;
+}
+
+//Uniform with unit variance, from a cell, the frame's number and a salt.
+float noiseAt( ivec2 at, uint salt )
+{
+	uint h  = mixBits( ( uint( at.x ) * 0x9e3779b9u ) ^ mixBits( ( uint( at.y ) + 0x632be5abu ) ^ mixBits( uint( Seed ) * 2u + salt ) ) );
+	float u = ( float( h >> 8u ) + 0.5 ) / 16777216.0;
+	return 1.73205081 * ( 2.0 * u - 1.0 );
 }
 
 void main()
@@ -807,6 +798,36 @@ void main()
 
 	vec2 A2 = eta;
 	vec2 B2 = rate / RateScale;
+
+	//The seed: the ambient disturbance the lattice grows from, a Wiener
+	//increment in eta. Only near k_c: the modes the shake can amplify need
+	//something to break their symmetry, and a seed white out to the grid's
+	//scale was up to 19 levels of caustic sparkle in silence. Each mode gets
+	//what a white field of SeedAmp a cell would give it, times a Gaussian band;
+	//no orientation is preferred, and the mean level (m = 0) is never moved.
+	//
+	//eta is real, so A( -m ) = conj A( m ): one complex number a pair, taken
+	//from whichever of the two cells comes first. With Walls the field must
+	//also be its own mirror image about the half cell, eta( N-1-i ) = eta( i ),
+	//which is A( m ) = r exp( i pi m / N ) with r real and the same at all four
+	//of ( +-mx, +-my ).
+	if( SeedAmp > 0.0 && ( m.x != 0 || m.y != 0 ) )
+	{
+		float band = ( k - Wavenumber ) / ( SeedWidth * Wavenumber );
+		float amp  = SeedAmp * sqrt( float( GridSize.x ) * float( GridSize.y ) ) * exp( -0.25 * band * band );
+		if( Walls != 0 )
+		{
+			float phase = 3.14159265 * ( float( m.x ) / float( GridSize.x ) + float( m.y ) / float( GridSize.y ) );
+			A2 += amp * noiseAt( abs( m ), 0u ) * vec2( cos( phase ), sin( phase ) );
+		}
+		else
+		{
+			bool first = cell.x < opposite.x || ( cell.x == opposite.x && cell.y <= opposite.y );
+			ivec2 key  = first ? cell : opposite;
+			float sign = cell == opposite ? 0.0 : ( first ? 1.0 : -1.0 );
+			A2 += amp * 0.70710678 * vec2( noiseAt( key, 0u ), sign * noiseAt( key, 1u ) );
+		}
+	}
 
 	//Pack for the way back, as in the evolve pass.
 	vec2 state = vec2( A2.x - B2.y, A2.y + B2.x );

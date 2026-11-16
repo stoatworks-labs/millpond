@@ -696,7 +696,7 @@ MillpondPlugin::Shaken MillpondPlugin::PlanShake( double nominal )
 }
 
 //---------------------------------------------------------------------------
-GLuint MillpondPlugin::ShakeState( const Shaken& shake, double dt, int walls )
+GLuint MillpondPlugin::ShakeState( const Shaken& shake, double dt )
 {
 	const GLuint state = surface[ surfaceIndex ].TextureID();
 
@@ -745,10 +745,8 @@ GLuint MillpondPlugin::ShakeState( const Shaken& shake, double dt, int walls )
 	}
 
 	//-------------------------------------------------------------------
-	// e. Saturated and seeded, into the other envelope buffer.
+	// e. Saturated, into the other envelope buffer.
 	//-------------------------------------------------------------------
-	const double cellArea = ( grid.lx / grid.nx ) * ( grid.ly / grid.ny );
-	const double seedAmp  = seedOn && dt > 0.0 ? faraday::kSeed * std::sqrt( dt / cellArea ) : 0.0;
 	{
 		ScopedFBOBinding fbo( envelope[ 1 - current ].GetGLID(), ScopedFBOBinding::RB_REVERT );
 		glViewport( 0, 0, grid.nx, grid.ny );
@@ -760,12 +758,8 @@ GLuint MillpondPlugin::ShakeState( const Shaken& shake, double dt, int walls )
 
 		shakeStateShader.Set( "StateTexture", 0 );
 		shakeStateShader.Set( "EnvelopeTexture", 1 );
-		setInts( shakeStateShader, "GridSize", grid.nx, grid.ny );
-		shakeStateShader.Set( "Walls", walls );
 		shakeStateShader.Set( "SatRate", static_cast< float >( shake.satRate ) );
 		shakeStateShader.Set( "Dt", static_cast< float >( dt ) );
-		shakeStateShader.Set( "SeedAmp", static_cast< float >( seedAmp ) );
-		shakeStateShader.Set( "Seed", static_cast< int >( shakeFrame++ & 0x7fffffffu ) );
 		quad.Draw();
 	}
 	return envelope[ 1 - current ].TextureID();
@@ -847,9 +841,9 @@ void MillpondPlugin::Simulate( const std::vector< Impact >& impacts, double dt, 
 	const float margin    = 0.5f * std::min( frameWidth, frameHeight );
 	const float spongeRate = static_cast< float >( 18.0 * fastest ) / std::max( margin, 0.01f );
 
-	//A shaken frame first saturates and seeds the state (passes a to e); the
-	//inject pass then reads that instead of last frame's surface.
-	const GLuint state = shaken ? ShakeState( *shaken, dt, walls ) : surface[ surfaceIndex ].TextureID();
+	//A shaken frame first saturates the state (passes a to e); the inject pass
+	//then reads that instead of last frame's surface.
+	const GLuint state = shaken ? ShakeState( *shaken, dt ) : surface[ surfaceIndex ].TextureID();
 
 	//-------------------------------------------------------------------
 	// 1. Inject: state times sponge, plus craters, into spectrum[ 0 ].
@@ -893,6 +887,12 @@ void MillpondPlugin::Simulate( const std::vector< Impact >& impacts, double dt, 
 		ScopedSamplerActivation sampler1( 1 );
 		Scoped2DTextureBinding table( driveTexture );
 
+		//The seed, as a white field's RMS a cell: a Wiener process in time (so
+		//the noise a second does not depend on the frame rate) normalised by
+		//the cell's area (so a mode's share does not depend on Detail).
+		const double cellArea = ( grid.lx / grid.nx ) * ( grid.ly / grid.ny );
+		const double seedAmp  = seedOn && dt > 0.0 ? faraday::kSeed * std::sqrt( dt / cellArea ) : 0.0;
+
 		const int steps = shaken->steps;
 		shakenEvolveShader.Set( "Spectrum", 0 );
 		shakenEvolveShader.Set( "DriveTable", 1 );
@@ -908,6 +908,11 @@ void MillpondPlugin::Simulate( const std::vector< Impact >& impacts, double dt, 
 		shakenEvolveShader.Set( "Steps", steps );
 		shakenEvolveShader.Set( "Norm", 1.0f / ( static_cast< float >( grid.nx ) * static_cast< float >( grid.ny ) ) );
 		shakenEvolveShader.Set( "RateScale", kRateScale );
+		shakenEvolveShader.Set( "Wavenumber", static_cast< float >( shaken->wavenumber ) );
+		shakenEvolveShader.Set( "SeedWidth", faraday::kSeedWidth );
+		shakenEvolveShader.Set( "SeedAmp", static_cast< float >( seedAmp ) );
+		shakenEvolveShader.Set( "Seed", static_cast< int >( shakeFrame++ & 0x7fffffffu ) );
+		shakenEvolveShader.Set( "Walls", walls );
 		quad.Draw();
 	}
 	else

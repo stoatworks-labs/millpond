@@ -149,6 +149,8 @@ struct Perturb
 	bool offShake          = false;///< --faraday-off sets Shake a hair above 0
 	int rateShift          = 0;    ///< --rate compares against the 60 fps water this many frames early
 	bool stateLeak         = false;///< --state-shaken leaves a texture bound on unit 2 after the frame
+	double seedBand        = 1.0;  ///< --seed expects the band around this times k_c
+	int seedMirror         = 1;    ///< --seed expects Walls' mirror at N - seedMirror - i (1 is the half cell)
 };
 
 //---------------------------------------------------------------------------
@@ -458,7 +460,8 @@ enum class AudioFeed
 {
 	Silence,
 	Pulses,///< a bass-heavy spectrum with a hit every half second
-	Drone  ///< a steady bass: the low bins at 1, the rest at 0.05, every frame the same
+	Drone, ///< a steady bass: the low bins at 1, the rest at 0.05, every frame the same
+	Kick   ///< a kick in the lowest two bins every half second, over a steady pad in the rest
 };
 
 void feedAudio( MillpondPlugin& plugin, double seconds, AudioFeed feed )
@@ -467,6 +470,15 @@ void feedAudio( MillpondPlugin& plugin, double seconds, AudioFeed feed )
 	{
 		for( int bin = 0; bin < audio::kBins; ++bin )
 			plugin.SetParamElementValue( PT_AUDIO, static_cast< unsigned int >( bin ), bin < 4 ? 1.0f : 0.05f );
+		return;
+	}
+	if( feed == AudioFeed::Kick )
+	{
+		//What Bass Bins is for: one bin and the kick is all there is; sixteen
+		//and the pad's steady level dominates, so the bass barely moves.
+		const float kick = static_cast< float >( std::exp( -std::fmod( seconds, 0.5 ) / 0.06 ) );
+		for( int bin = 0; bin < audio::kBins; ++bin )
+			plugin.SetParamElementValue( PT_AUDIO, static_cast< unsigned int >( bin ), bin < 2 ? kick : 0.5f );
 		return;
 	}
 	const double beat  = std::fmod( seconds, 0.5 );
@@ -2884,6 +2896,84 @@ int runWavelength( const Perturb& perturb )
 }
 
 //===========================================================================
+// --seed
+//===========================================================================
+int runSeed( const Perturb& perturb )
+{
+	std::printf( "\n=== seed: in silence the shaken pond gets only a little noise near k_c, mirrored at Walls\n" );
+
+	for( const bool walls : { false, true } )
+	{
+		Rig rig;
+		if( !rig.Init( g_checkWidth, g_checkHeight ) )
+			return 1;
+		ShakeSetup setup;
+		setup.pond  = 0.5;
+		setup.walls = walls;
+		applyShake( rig, setup );
+		rig.feed = AudioFeed::Silence;//shaken, but nothing in the bass: the seed alone
+		if( !rig.Render( 120 ) || !requireShaken( rig, "seed" ) )
+			return 1;
+
+		const Floats surface = rig.Surface();
+		const Grid g         = rig.plugin.CurrentGrid();
+		const double kc      = dispersionWavenumber( kPi * rig.plugin.FaradayDriveHz(), rig.plugin.CurrentWater() );
+		const double centre  = perturb.seedBand * kc;
+		const double half    = 3.0 * faraday::kSeedWidth * kc;
+
+		//The band: the share of eta's power more than three standard deviations
+		//from k_c. A Gaussian band leaves 0.27% out there (erfc( 3 / sqrt 2 ));
+		//damping, stronger at short waves, only takes more away. The grid is
+		//periodic either way (Open's sponge quadrants included), so no window.
+		const std::vector< double > power = powerSpectrum( surface, g, 0, 0, g.nx, g.ny, false );
+		double total = 0.0, outside = 0.0;
+		for( int y = 0; y < g.ny; ++y )
+			for( int x = 0; x < g.nx; ++x )
+			{
+				const int mx = x < g.nx / 2 ? x : x - g.nx, my = y < g.ny / 2 ? y : y - g.ny;
+				if( mx == 0 && my == 0 )
+					continue;
+				const double k = std::hypot( 2.0 * kPi * mx / g.lx, 2.0 * kPi * my / g.ly );
+				const double p = power[ static_cast< size_t >( y ) * g.nx + x ];
+				total += p;
+				if( std::fabs( k - centre ) > half )
+					outside += p;
+			}
+		const double share = total > 0.0 ? outside / total : 1.0;
+		const double rms   = rmsAmplitude( surface, kPi * rig.plugin.FaradayDriveHz() );
+		Check( rms > 0.0 && share < 0.01,
+		       fmt( "%-5s: %.3f%% of the seed's power is more than 3 sd from %.1f rad/m (bound 1%%: a Gaussian leaves 0.27%%); height %.2e m",
+		            walls ? "Walls" : "Open", 100.0 * share, centre, rms ) );
+
+		//The method of images: with Walls the grid is the pond and its mirror
+		//images about the half cell, eta( N-1-i ) = eta( i ). The seed is the
+		//only thing in the water here, so a seed that broke the mirror would
+		//show at its full size. Float FFT round trips leave about 1e-6 a frame,
+		//a random walk to about 1e-5 over 120: the bound is ten times that.
+		if( walls )
+		{
+			double mismatch = 0.0, energy = 0.0;
+			const int shift = perturb.seedMirror;
+			for( int y = 0; y < g.ny; ++y )
+				for( int x = 0; x < g.nx; ++x )
+				{
+					const double e  = surface[ ( static_cast< size_t >( y ) * g.nx + x ) * 4 ];
+					const int mxi   = ( ( g.nx - shift - x ) % g.nx + g.nx ) % g.nx;
+					const int myi   = ( ( g.ny - shift - y ) % g.ny + g.ny ) % g.ny;
+					const double ex = surface[ ( static_cast< size_t >( y ) * g.nx + mxi ) * 4 ];
+					const double ey = surface[ ( static_cast< size_t >( myi ) * g.nx + x ) * 4 ];
+					mismatch += ( e - ex ) * ( e - ex ) + ( e - ey ) * ( e - ey );
+					energy += 2.0 * e * e;
+				}
+			const double relative = energy > 0.0 ? std::sqrt( mismatch / energy ) : 1.0;
+			Check( energy > 0.0 && relative < 1e-4,
+			       fmt( "Walls: the seeded pond is its own mirror image to %.1e of its RMS (bound 1e-4)", relative ) );
+		}
+	}
+	return Verdict();
+}
+
+//===========================================================================
 // --pattern
 //===========================================================================
 struct LatticeSignature
@@ -3447,6 +3537,16 @@ int runFaradayNegative()
 		p.stateLeak = true;
 		cases.push_back( { "state-shaken", runStateShaken, p, "the host's view after the frame has a texture left on unit 2" } );
 	}
+	{
+		Perturb p;
+		p.seedBand = 1.5;
+		cases.push_back( { "seed (band)", runSeed, p, "expect the seed's band at 1.5 k_c" } );
+	}
+	{
+		Perturb p;
+		p.seedMirror = 0;
+		cases.push_back( { "seed (mirror)", runSeed, p, "expect Walls' mirror about a cell, not the half cell" } );
+	}
 
 	int unfalsifiable = 0;
 	for( const Case& c : cases )
@@ -3892,6 +3992,8 @@ int main( int argc, char** argv )
 	std::vector< int > dropFrames, skimFrames;
 	bool beat  = false;
 	bool drone = false;
+	bool kick  = false;
+	bool seed  = true;
 	std::string mode;
 	std::string scriptPath;
 	int filmFrames = -1;
@@ -3915,6 +4017,8 @@ int main( int argc, char** argv )
 				"  --skim N          press Skim on frame N. Repeatable.\n"
 				"  --beat            feed a beat every half second into the Audio buffer\n"
 				"  --drone           feed a steady bass into the Audio buffer\n"
+				"  --kick            feed a kick in the lowest two bins over a steady pad\n"
+				"  --no-seed         shaken frames add no seed noise (the harness's hook)\n"
 				"  --set \"Name=V\"    set a parameter by its display name. Repeatable.\n"
 				"  --list            print every parameter and its default, then exit\n"
 				"  --pipe            raw RGBA frames on stdin, raw RGBA frames on stdout\n"
@@ -3924,7 +4028,7 @@ int main( int argc, char** argv )
 				"  --fft --modes --gravity --quiet --shallow --banks --refraction --fresnel\n"
 				"  --caustics --still --skim-check --rain --audio --state --negative --bench\n\n"
 				"  Faraday, at the raster --size gives (MPTEST_RENDERER=software for Apple's software renderer):\n"
-				"  --mathieu --onset --half --wavelength --pattern --strobe --clock --resize\n"
+				"  --mathieu --onset --half --wavelength --pattern --strobe --clock --resize --seed\n"
 				"  --faraday-off --rate --state-shaken --faraday-negative\n" );
 			return 0;
 		}
@@ -3946,6 +4050,10 @@ int main( int argc, char** argv )
 			beat = true;
 		else if( argument == "--drone" )
 			drone = true;
+		else if( argument == "--kick" )
+			kick = true;
+		else if( argument == "--no-seed" )
+			seed = false;
 		else if( argument == "--pipe" )
 			mode = "pipe";
 		else if( argument == "--film" && hasNext )
@@ -3970,7 +4078,7 @@ int main( int argc, char** argv )
 		         || argument == "--fresnel" || argument == "--caustics" || argument == "--still"
 		         || argument == "--rain" || argument == "--audio" || argument == "--negative" || argument == "--bench"
 		         || argument == "--state" || argument == "--mathieu" || argument == "--onset" || argument == "--half"
-		         || argument == "--wavelength" || argument == "--pattern" || argument == "--strobe"
+		         || argument == "--wavelength" || argument == "--pattern" || argument == "--strobe" || argument == "--seed"
 		         || argument == "--clock" || argument == "--resize" || argument == "--faraday-off"
 		         || argument == "--rate" || argument == "--state-shaken" || argument == "--faraday-negative" )
 			mode = argument.substr( 2 );
@@ -4029,7 +4137,7 @@ int main( int argc, char** argv )
 		{ "still", runStill },     { "skim", runSkim },         { "rain", runRain },
 		{ "audio", runAudio },       { "state", runState },
 		{ "mathieu", runMathieu },   { "onset", runOnset },       { "half", runHalf },
-		{ "wavelength", runWavelength }, { "pattern", runPattern }, { "strobe", runStrobe },
+		{ "wavelength", runWavelength }, { "pattern", runPattern }, { "strobe", runStrobe }, { "seed", runSeed },
 		{ "clock", runClock },       { "resize", runResize },     { "faraday-off", runFaradayOff },
 		{ "rate", runRate },         { "state-shaken", runStateShaken },
 	};
@@ -4080,6 +4188,9 @@ int main( int argc, char** argv )
 				rig.feed = AudioFeed::Pulses;
 			if( drone )
 				rig.feed = AudioFeed::Drone;
+			if( kick )
+				rig.feed = AudioFeed::Kick;
+			rig.plugin.SetSeedForTest( seed );
 
 			for( int f = 0; f < std::max( frames, 1 ) && result == 0; ++f )
 			{
