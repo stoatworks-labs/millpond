@@ -4039,9 +4039,11 @@ int runBench()
 	}
 
 	//Faraday: the same busy frame, off and shaken, in one run so the rows
-	//compare. Shaken at the defaults (10 Hz: six substeps a 60 fps frame,
-	//Squares, so the kernel's two transforms run too), and at 120 Hz with
-	//Speed at 4 (64 substeps a frame): the substeps are the cost that grows.
+	//compare. Shaken at 10 Hz (six substeps a 60 fps frame, Squares, so the
+	//kernel's two transforms run too), and at 120 Hz with Speed at 4 (256
+	//substeps a frame): the substeps are the cost that grows. The stroboscope
+	//off, so every frame costs the same; with it on, a frame that jumps a
+	//response period costs that period's substeps (64 at 10 Hz).
 	std::printf( "\n  Faraday (Detail 1024, rain 0.5, a steady bass):\n" );
 	struct Shake
 	{
@@ -4062,6 +4064,7 @@ int runBench()
 			rig.Set( PT_SHAKE, shake.shake );
 			rig.Set( PT_DRIVE, ParamFromDrive( static_cast< float >( shake.driveHz ) ) );
 			rig.Set( PT_SPEED, ParamFromSpeed( static_cast< float >( shake.speed ) ) );
+			rig.Set( PT_SLOW_MOTION, ParamFromSlowMotion( 1.0 ) );
 			rig.feed = AudioFeed::Drone;
 			if( !rig.Render( 20 ) )
 				return 1;

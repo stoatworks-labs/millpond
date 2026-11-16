@@ -272,11 +272,14 @@ float ParamFromDrive( float hertz );
 
 /// The walls' extra linear damping, s^-1, added to Lamb's 2 nu k^2 for every
 /// mode: exactly 0 at the bottom of the travel, then 0.1 to 30, geometrically.
-/// The default 3 is Benjamin & Ursell's measured tube, in their units 0.027.
+/// The default 2 is a little under Benjamin & Ursell's measured tube (2.7, in
+/// their units 0.027).
 float DampingFromParam( float value );
 float ParamFromDamping( float rate );
 
-/// The stroboscope's slow-down, 1 to 100 times, geometrically. 1 is off.
+/// The stroboscope's slow-down, 1 to 100 times, geometrically. 1 is off. The
+/// default 8 shows a 10 Hz drive's lattice reversing 1.25 times a second, out
+/// of the photosensitive band it would flicker in unslowed (10 a second).
 double SlowMotionFromParam( float value );
 float ParamFromSlowMotion( double factor );
 

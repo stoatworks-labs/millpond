@@ -9,6 +9,11 @@
 #
 #     tools/verify.sh [BUILD_DIR]
 #
+# SKIP_SOFTWARE=1 leaves out the Faraday checks on Apple's software renderer
+# (about twenty minutes); MUTANTS=1 adds the Faraday shader mutants (about
+# eight). Both are part of the claim the README makes: skip them only while
+# iterating.
+#
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -320,17 +325,89 @@ step "Checks"
 "$BUILD/mptest" --state
 
 #---------------------------------------------------------------------------
+step "Faraday"
+#---------------------------------------------------------------------------
+# The shaken tank, in the order the README makes its claims, at two rasters:
+# the water is sized in metres, but the frame-dependent parts (the strobe's
+# clock, a resize, the GL state, Shake 0 against far ends) are not.
+FARADAY_CHECKS="mathieu onset half wavelength seed saturation pattern strobe clock resize faraday-off rate state-shaken"
+for size in 320x180 1280x720; do
+	for check in $FARADAY_CHECKS; do
+		"$BUILD/mptest" --"$check" --size "$size"
+	done
+done
+
+#---------------------------------------------------------------------------
 step "Negative controls"
 #---------------------------------------------------------------------------
 # The checks above, run against a model that is deliberately wrong, and
 # required to fail. A check that cannot fail is not a check.
 "$BUILD/mptest" --negative
+"$BUILD/mptest" --faraday-negative --size 320x180
+"$BUILD/mptest" --faraday-negative --size 1280x720
+
+#---------------------------------------------------------------------------
+step "Faraday off is v0.1.0"
+#---------------------------------------------------------------------------
+# --faraday-off compares this build with itself. This compares it, bit for
+# bit, with the build before Faraday existed: ten scenes, two rasters, the
+# output, the surface and the caustics, and v0.1.0's parameter table.
+bash tools/offcompare.sh "$BUILD"
+bash tools/offcompare.sh --negative "$BUILD"
+
+#---------------------------------------------------------------------------
+step "Pipes"
+#---------------------------------------------------------------------------
+# --pipe and --film are how takes are filmed. A reader that stops early (head,
+# an ffmpeg that has had enough) must end the harness with an error, exit 1,
+# not kill it with SIGPIPE, 141. Under bash, read from PIPESTATUS -- and set
+# +e / +o pipefail for the one pipeline that is meant to fail. The control:
+# `yes`, which does not ignore SIGPIPE, must read 141 the same way.
+frame=$(( 64 * 36 * 4 ))
+bytes="$( "$BUILD/mptest" --film 3 --size 64x36 --set Shake=1 | wc -c | tr -d ' ' )"
+[[ "$bytes" == "$(( 3 * frame ))" ]] || fail "--film 3 wrote $bytes bytes, not $(( 3 * frame ))"
+bytes="$( /usr/bin/head -c $(( 2 * frame )) /dev/zero | "$BUILD/mptest" --pipe --size 64x36 --set Shake=1 | wc -c | tr -d ' ' )"
+[[ "$bytes" == "$(( 2 * frame ))" ]] || fail "--pipe returned $bytes bytes for $(( 2 * frame ))"
+set +e +o pipefail
+"$BUILD/mptest" --film 200 --size 320x180 --set Shake=1 \
+	| "$BUILD/mptest" --pipe --size 320x180 --set Shake=1 | /usr/bin/head -c 1 >/dev/null
+statuses=( "${PIPESTATUS[@]}" )
+yes | /usr/bin/head -c 1 >/dev/null
+control=( "${PIPESTATUS[@]}" )
+set -e -o pipefail
+[[ "${control[0]}" == "141" ]] || fail "the control: yes | head read ${control[0]}, not 141 -- PIPESTATUS is not being read"
+[[ "${statuses[0]}" == "1" && "${statuses[1]}" == "1" ]] \
+	|| fail "mptest --film | mptest --pipe | head -c 1 exited ${statuses[*]}, not 1 1 0"
+echo "ok   --film and --pipe carry whole frames shaken; | head -c 1 ends both with 1 (the control reads 141)"
 
 #---------------------------------------------------------------------------
 step "Dead controls"
 #---------------------------------------------------------------------------
 # The only thing that catches a uniform whose name does not match the C++.
 python3 tools/sweep.py --build "$(basename "$BUILD")"
+
+#---------------------------------------------------------------------------
+step "Faraday on Apple's software renderer"
+#---------------------------------------------------------------------------
+# Would it hold on another rasteriser? The software renderer is the other one
+# on every Mac, and its transcendentals are poor enough to have broken three
+# of these checks before the passes stopped leaning on them (AGENTS.md).
+if [[ "${SKIP_SOFTWARE:-0}" == "1" ]]; then
+	echo "   skipped: SKIP_SOFTWARE=1"
+else
+	for check in $FARADAY_CHECKS; do
+		MPTEST_RENDERER=software "$BUILD/mptest" --"$check" --size 320x180
+	done
+fi
+
+#---------------------------------------------------------------------------
+step "Faraday shader mutants"
+#---------------------------------------------------------------------------
+if [[ "${MUTANTS:-0}" == "1" ]]; then
+	python3 tools/mutate.py
+else
+	echo "   skipped: set MUTANTS=1 (one-character mutants of the four Faraday shaders, about eight minutes)"
+fi
 
 #---------------------------------------------------------------------------
 step "Cost"

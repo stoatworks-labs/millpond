@@ -141,15 +141,18 @@ MillpondPlugin::MillpondPlugin()
 	params[ PT_MIX ]  = 1.0f;
 
 	//Faraday: off. Shake 0 is v0.1.0 -- not a similar picture, the same passes
-	//(`mptest --faraday-off`). The others are where a first shake should start:
-	//a 10 Hz drive stands a lattice about twenty wavelengths up the default
-	//1.5 m frame, slow enough at 5 Hz to be seen without the stroboscope, on
-	//a tank that loses 2/s at its walls (Benjamin & Ursell measured 2.7 in
-	//theirs) -- enough to lie down within two seconds of the bass stopping.
+	//(`mptest --faraday-off`, `tools/offcompare.sh`). The others are where a
+	//first shake should start: a 10 Hz drive stands a lattice about twenty
+	//wavelengths up the default 1.5 m frame, 13 grid cells a wavelength at
+	//the default Detail, on a tank that loses 2/s at its walls (Benjamin &
+	//Ursell measured 2.7 in theirs) -- enough to lie down within two seconds
+	//of the bass stopping. The stroboscope is ON at 8x: unslowed, that lattice
+	//turns inside out ten times a second, a high-contrast pattern reversal in
+	//the photosensitive band; at 8x it is 1.25 a second.
 	params[ PT_SHAKE ]       = 0.0f;
 	params[ PT_DRIVE ]       = ParamFromDrive( 10.0f );
 	params[ PT_DAMPING ]     = ParamFromDamping( 2.0f );
-	params[ PT_SLOW_MOTION ] = ParamFromSlowMotion( 1.0 );
+	params[ PT_SLOW_MOTION ] = ParamFromSlowMotion( 8.0 );
 	params[ PT_PATTERN ]     = static_cast< float >( Pattern::Squares );
 	params[ PT_BASS_BINS ]   = ParamFromBassBins( 2 );
 
