@@ -553,7 +553,9 @@ within a factor of three of the GPU's either way (the widest:
 | `--state-shaken` | 0 wrong | exact | as `--state`, with every Faraday pass run |
 | `offcompare.sh` | 122 files at two rasters bit-identical to 64f9690's build | exact | two processes on one GPU are deterministic. GPU only: the software renderer is not deterministic across builds |
 
-`--faraday-negative` runs 18 deliberately wrong models; all 18 fail.
+`--faraday-negative` runs 18 deliberately wrong models; all 18 fail, at both
+rasters on the GPU and, in one run by hand at 320×180, on Apple's software
+renderer (117 minutes, so verify.sh does not repeat it there).
 `offcompare.sh --negative` sets Shake to 0.001 and must find differences
 (54 of 122 files). The pipe check reads `PIPESTATUS` and has `yes | head` as
 its control (141).
