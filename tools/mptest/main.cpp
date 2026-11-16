@@ -144,6 +144,7 @@ struct Perturb
 	double wavelengthOmega = 1.0;  ///< --wavelength expects the lattice of this times the drive
 	bool patternShift      = false;///< --pattern scores each run as the next pattern
 	bool strobeAsClock     = false;///< --strobe expects Slow Motion to be a slower clock
+	bool strobeOnePass     = false;///< --strobe: the plugin takes a stroboscope's jump in one pass
 	bool floatClock        = false;///< --clock: the plugin takes its phase from a float clock
 	bool resizeStill       = false;///< --resize presses Still on the resize frame
 	bool offShake          = false;///< --faraday-off sets Shake a hair above 0
@@ -3592,6 +3593,68 @@ int runStrobe( const Perturb& perturb )
 		                         "%.1e (bound 1e-4)",
 		                         fps, diff ) );
 	}
+
+	//D: at full Shake, where the saturation decides the height. The
+	//stroboscope's jumps are whole response periods (0.2 s here), and the
+	//saturation is applied once a pass ahead of the evolve: taken in one pass,
+	//a jump lets the lattice grow unchecked for 0.2 s. The strobed lattice
+	//must stand as high as the unstrobed one: its envelope over one seen
+	//cycle (S response periods, every frame -- every phase), against the
+	//unstrobed one's over a drive period sampled at 240 fps (24 phases).
+	//The bound is the frame-step dependence of the saturated height that
+	//`--saturation` measures, between 1/60 and 1/24 s frames and 1/30 s
+	//chunks: x1.067, rounded up. The plugin cuts a jump into 1/30 s chunks,
+	//inside that range. Taken in one pass, a jump stood it 21% high and 15%
+	//low. (A machine's measurement, not a derivation: if another GPU moves
+	//--saturation's spread, move this with it.)
+	{
+		ShakeSetup setup;
+		setup.pond      = 0.5;
+		setup.driveHz   = driveHz;
+		setup.overdrive = 4.0;
+		setup.pattern   = static_cast< int >( Pattern::Squares );
+		const double settle = 8.0;
+		auto envelope = [ & ]( double slowMotion, double& lo, double& hi, int& chunks ) {
+			Rig rig;
+			if( !rig.Init( g_checkWidth, g_checkHeight ) )
+				return false;
+			ShakeSetup s = setup;
+			s.slow       = slowMotion;
+			applyShake( rig, s );
+			rig.plugin.SetOnePassForTest( perturb.strobeOnePass );
+			const int grown = static_cast< int >( settle * rig.fps );
+			if( !rig.Render( grown ) || !requireShaken( rig, "strobe" ) )
+				return false;
+			int frames = static_cast< int >( std::lround( slowMotion * 2.0 * kPi / omegaC * rig.fps ) );
+			if( slowMotion <= 1.0 )
+			{
+				//Unstrobed: on to 240 fps for one drive period, on the same clock.
+				rig.clockOffset = grown / rig.fps - grown / 240.0;
+				rig.fps         = 240.0;
+				frames          = static_cast< int >( std::lround( kPi / omegaC * rig.fps ) );
+			}
+			lo = 1e300, hi = 0.0, chunks = 0;
+			for( int f = 0; f < frames; ++f )
+			{
+				if( !rig.Render( 1 ) )
+					return false;
+				const double a = rmsAmplitude( rig.Surface(), omegaC );
+				lo             = std::min( lo, a );
+				hi             = std::max( hi, a );
+			}
+			return true;
+		};
+		double loPlain = 0.0, hiPlain = 0.0, loStrobe = 0.0, hiStrobe = 0.0;
+		int unused = 0, chunks = 0;
+		if( !envelope( 1.0, loPlain, hiPlain, unused ) || !envelope( slow, loStrobe, hiStrobe, chunks ) )
+			return 1;
+		const double bound = 1.07;
+		const double top = hiStrobe / hiPlain, bottom = loStrobe / loPlain;
+		Check( top < bound && bottom > 1.0 / bound,
+		       fmt( "4x threshold: the strobed lattice stands at %.3e to %.3e m, the unstrobed at %.3e to %.3e m "
+		            "(top x%.3f, bottom x%.3f; bound x%.3f)",
+		            loStrobe, hiStrobe, loPlain, hiPlain, top, bottom, bound ) );
+	}
 	return Verdict();
 }
 
@@ -3838,6 +3901,11 @@ int runFaradayNegative()
 		Perturb p;
 		p.strobeAsClock = true;
 		cases.push_back( { "strobe", runStrobe, p, "expect Slow Motion to be a slower clock, and the picture unslowed" } );
+	}
+	{
+		Perturb p;
+		p.strobeOnePass = true;
+		cases.push_back( { "strobe (height)", runStrobe, p, "take each stroboscope's jump in one pass" } );
 	}
 	{
 		Perturb p;

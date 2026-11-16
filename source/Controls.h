@@ -259,9 +259,10 @@ float GlintFromParam( float value );
 /// How far past the first Mathieu tongue's threshold the loudest bass drives
 /// the tank: 0 to 4 times, linearly. 0 is off. In units of the threshold, not
 /// of g, because the threshold moves with Drive, Damping and the water. Not
-/// further than 4: the fastest-growing wavenumber moves off k_c by about
-/// ( Shake gamma )^2 / omega_c in frequency, and past 4 at the defaults the
-/// lattice would shrink by a third on a loud hit (AGENTS.md).
+/// further than 4: the fastest-growing wavenumber moves off k_c as the shake
+/// grows. At the defaults the lattice measured 7% short at 4x, and the
+/// leading-order growth rate puts the fastest mode 60% short at 8x
+/// (AGENTS.md).
 float ShakeFromParam( float value );
 
 /// The tank's shaking frequency, 5 to 120 Hz, geometrically. The lattice

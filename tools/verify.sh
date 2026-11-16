@@ -392,12 +392,30 @@ step "Faraday on Apple's software renderer"
 # Would it hold on another rasteriser? The software renderer is the other one
 # on every Mac, and its transcendentals are poor enough to have broken three
 # of these checks before the passes stopped leaning on them (AGENTS.md).
+#
+# The software renderer runs each process on one core, and the longest check
+# takes many minutes on it, so the checks run side by side and are reported
+# in order once all have finished.
 if [[ "${SKIP_SOFTWARE:-0}" == "1" ]]; then
 	echo "   skipped: SKIP_SOFTWARE=1"
 else
+	swlogs="$(mktemp -d "${TMPDIR:-/tmp}/millpond-software.XXXXXX")"
+	pids=()
 	for check in $FARADAY_CHECKS; do
-		MPTEST_RENDERER=software "$BUILD/mptest" --"$check" --size 320x180
+		MPTEST_RENDERER=software "$BUILD/mptest" --"$check" --size 320x180 >"$swlogs/$check.txt" 2>&1 &
+		pids+=( "$!" )
 	done
+	swbad=""
+	i=0
+	for check in $FARADAY_CHECKS; do
+		status=0
+		wait "${pids[$i]}" || status=$?
+		cat "$swlogs/$check.txt"
+		[[ "$status" -eq 0 ]] || swbad="$swbad $check"
+		i=$(( i + 1 ))
+	done
+	rm -rf "$swlogs"
+	[[ -z "$swbad" ]] || fail "on Apple's software renderer:$swbad"
 fi
 
 #---------------------------------------------------------------------------

@@ -46,6 +46,20 @@ constexpr double kSaturation = 150.0;
 constexpr double kSeed     = 1e-8;
 constexpr float kSeedWidth = 0.25f;
 
+/// The longest stretch of water one shaken pass may cover, seconds, and the
+/// most passes a frame may take. The saturation is applied once a pass, ahead
+/// of that pass's evolve -- a first-order splitting, whose error grows with
+/// the step. The stroboscope advances the water in jumps of whole response
+/// periods (0.2 s at 10 Hz), and in a single jump a lattice at 4x threshold
+/// grew unchecked: at the defaults, under Slow Motion 8, it stood between
+/// 0.97 and 1.68 mm RMS where the unstrobed pond stood between 1.15 and 1.37
+/// (`--strobe` holds the two together). So a longer frame is
+/// advanced in equal chunks no longer than this: 1/30 s, inside the frame
+/// steps `--saturation` holds to one height (1/60 to 1/15 s). A frame that
+/// would need more than kMaxChunks takes longer chunks instead.
+constexpr double kMaxShakenStep = 1.0 / 30.0;
+constexpr int kMaxChunks        = 32;
+
 /// The width (one standard deviation) of the pattern kernel's notches, as a
 /// fraction of k_c. Wide enough to keep catching the lattice's pairs when the
 /// lattice forms off k_c -- at 0.1 a 2x shake at the old defaults formed 12%

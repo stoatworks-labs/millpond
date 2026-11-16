@@ -1158,7 +1158,32 @@ FFResult MillpondPlugin::ProcessOpenGL( ProcessOpenGLStruct* pgl )
 	}
 
 	const std::vector< Impact > impacts = CollectImpacts( dt );
-	if( dt > 0.0 || !impacts.empty() )
+	if( shaken && dt > faraday::kMaxShakenStep && !onePassForTest )
+	{
+		//A long shaken frame -- a stroboscope's jump, a slow host, a high
+		//Speed -- in equal chunks, each saturated and evolved on its own
+		//(Faraday.h, kMaxShakenStep). The drive's phase runs on in double
+		//from chunk to chunk; the frame's craters go into the first.
+		const int chunks   = std::min( static_cast< int >( std::ceil( dt / faraday::kMaxShakenStep ) ), faraday::kMaxChunks );
+		const double h     = dt / chunks;
+		const double omega = kTwoPiD * shake.driveHz;
+		Shaken chunk       = shake;
+		chunk.waterStep    = h;
+		int steps          = 0;
+		for( int i = 0; i < chunks; ++i )
+		{
+			chunk.theta0 = faraday::Wrap( shake.theta0 + omega * h * i );
+			chunk.steps  = faraday::DriveTable( chunk.theta0, omega, h, driveTable );
+			glBindTexture( GL_TEXTURE_2D, driveTexture );
+			glTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, chunk.steps, 1, GL_RG, GL_FLOAT, driveTable.data() );
+			glBindTexture( GL_TEXTURE_2D, 0 );
+			Simulate( i == 0 ? impacts : std::vector< Impact >(), h, &chunk );
+			steps += chunk.steps;
+		}
+		lastShake.steps  = steps;
+		lastShake.chunks = chunks;
+	}
+	else if( dt > 0.0 || !impacts.empty() )
 		Simulate( impacts, dt, shaken );
 
 	//-------------------------------------------------------------------

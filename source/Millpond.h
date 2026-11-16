@@ -160,6 +160,11 @@ public:
 	{
 		return lastShake.steps;
 	}
+	/// How many shaken passes the last frame took (faraday::kMaxShakenStep).
+	int FaradayChunks() const
+	{
+		return lastShake.chunks;
+	}
 	/// The drive's phase at the START of the last frame's water, radians.
 	double FaradayDrivePhase() const
 	{
@@ -190,6 +195,13 @@ public:
 	void SetFloatClockForTest( bool on )
 	{
 		floatClockForTest = on;
+	}
+
+	/// The negative control for the stroboscope's height check, and nothing
+	/// else: advance a long shaken frame in one pass, unchunked.
+	void SetOnePassForTest( bool on )
+	{
+		onePassForTest = on;
 	}
 
 	/// Every impact injected so far, in order. For `--skim` and `--rain`.
@@ -244,7 +256,8 @@ private:
 		double satRate     = 0.0;///< beta, 1 / ( m^2 s )
 		double waterStep   = 0.0;///< s
 		double theta0      = 0.0;///< the drive's phase at the frame's start
-		int steps          = 0;
+		int steps          = 0;  ///< substeps, over every chunk
+		int chunks         = 1;  ///< shaken passes this frame
 		int pattern        = 0;
 	};
 
@@ -351,6 +364,7 @@ private:
 	unsigned int shakeFrame = 0;///< numbers the seed
 	bool seedOn             = true;
 	bool floatClockForTest  = false;
+	bool onePassForTest     = false;
 };
 
 } // namespace millpond
