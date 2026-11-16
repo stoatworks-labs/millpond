@@ -411,11 +411,18 @@ GLuint paddedTexture( const Floats& picture, int width, int height, int hw, int 
 enum class AudioFeed
 {
 	Silence,
-	Pulses///< a bass-heavy spectrum with a hit every half second
+	Pulses,///< a bass-heavy spectrum with a hit every half second
+	Drone  ///< a steady bass: the low bins at 1, the rest at 0.05, every frame the same
 };
 
 void feedAudio( MillpondPlugin& plugin, double seconds, AudioFeed feed )
 {
+	if( feed == AudioFeed::Drone )
+	{
+		for( int bin = 0; bin < audio::kBins; ++bin )
+			plugin.SetParamElementValue( PT_AUDIO, static_cast< unsigned int >( bin ), bin < 4 ? 1.0f : 0.05f );
+		return;
+	}
 	const double beat  = std::fmod( seconds, 0.5 );
 	const float strike = feed == AudioFeed::Pulses ? static_cast< float >( 0.15 + 1.5 * std::exp( -beat / 0.06 ) ) : 0.0f;
 	for( int bin = 0; bin < audio::kBins; ++bin )
@@ -2507,12 +2514,14 @@ int main( int argc, char** argv )
 {
 	std::string outPath = "/tmp/millpond.png";
 	std::string cardPath;
+	std::string surfacePath;
 	std::vector< std::string > settings;
 	int width  = 1280;
 	int height = 720;
 	int frames = 120;
 	std::vector< int > dropFrames, skimFrames;
-	bool beat = false;
+	bool beat  = false;
+	bool drone = false;
 	std::string mode;
 	std::string scriptPath;
 	int filmFrames = -1;
@@ -2529,11 +2538,13 @@ int main( int argc, char** argv )
 				"mptest -- render Millpond offline and measure its water\n\n"
 				"  --out PATH        render the card and write it here\n"
 				"  --card PATH       write the card itself\n"
+				"  --surface PATH    also write the grid: nx, ny (int32) then RGBA float32 a cell\n"
 				"  --size WxH        render size (default 1280x720)\n"
 				"  --frames N        frames of 60 fps water before reading back (default 120)\n"
 				"  --drop N          press Drop on frame N. Repeatable.\n"
 				"  --skim N          press Skim on frame N. Repeatable.\n"
 				"  --beat            feed a beat every half second into the Audio buffer\n"
+				"  --drone           feed a steady bass into the Audio buffer\n"
 				"  --set \"Name=V\"    set a parameter by its display name. Repeatable.\n"
 				"  --list            print every parameter and its default, then exit\n"
 				"  --pipe            raw RGBA frames on stdin, raw RGBA frames on stdout\n"
@@ -2548,6 +2559,8 @@ int main( int argc, char** argv )
 			outPath = argv[ ++i ];
 		else if( argument == "--card" && hasNext )
 			cardPath = argv[ ++i ];
+		else if( argument == "--surface" && hasNext )
+			surfacePath = argv[ ++i ];
 		else if( argument == "--set" && hasNext )
 			settings.push_back( argv[ ++i ] );
 		else if( argument == "--frames" && hasNext )
@@ -2558,6 +2571,8 @@ int main( int argc, char** argv )
 			skimFrames.push_back( std::atoi( argv[ ++i ] ) );
 		else if( argument == "--beat" )
 			beat = true;
+		else if( argument == "--drone" )
+			drone = true;
 		else if( argument == "--pipe" )
 			mode = "pipe";
 		else if( argument == "--film" && hasNext )
@@ -2671,6 +2686,8 @@ int main( int argc, char** argv )
 			}
 			if( beat )
 				rig.feed = AudioFeed::Pulses;
+			if( drone )
+				rig.feed = AudioFeed::Drone;
 
 			for( int f = 0; f < std::max( frames, 1 ) && result == 0; ++f )
 			{
@@ -2680,6 +2697,24 @@ int main( int argc, char** argv )
 					rig.Press( PT_SKIM );
 				if( !rig.Render( 1 ) )
 					result = 1;
+			}
+
+			if( result == 0 && !surfacePath.empty() )
+			{
+				//The grid's size, two int32s, then (eta, eta_t / kRateScale,
+				//eta_x, eta_y) as float32 per cell, row 0 first.
+				const Grid& g       = rig.plugin.CurrentGrid();
+				const Floats state  = rig.Surface();
+				const int32_t dims[ 2 ] = { g.nx, g.ny };
+				std::ofstream file( surfacePath, std::ios::binary );
+				file.write( reinterpret_cast< const char* >( dims ), sizeof( dims ) );
+				file.write( reinterpret_cast< const char* >( state.data() ),
+				            static_cast< std::streamsize >( state.size() * sizeof( float ) ) );
+				if( !file )
+				{
+					std::fprintf( stderr, "could not write %s\n", surfacePath.c_str() );
+					result = 1;
+				}
 			}
 
 			if( result == 0 )

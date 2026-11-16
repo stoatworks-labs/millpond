@@ -43,8 +43,11 @@ constexpr double kSaturation = 150.0;
 /// a cell over a second: far below anything the picture shows.
 constexpr double kSeed = 1e-8;
 
-/// The width of the pattern kernel's notches, as a fraction of k_c.
-constexpr float kNotchWidth = 0.1f;
+/// The width (one standard deviation) of the pattern kernel's notches, as a
+/// fraction of k_c. Wide enough to keep catching the lattice's pairs when the
+/// lattice forms off k_c -- at 0.1 a 2x shake at the old defaults formed 12%
+/// high, the notch missed and every Pattern gave the same labyrinth.
+constexpr float kNotchWidth = 0.25f;
 
 /// The wavenumber whose free frequency is `omega`: the root of millpond's own
 /// dispersion relation, Omega( k ) = omega. Omega rises monotonically with k,

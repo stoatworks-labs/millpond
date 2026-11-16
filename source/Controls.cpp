@@ -142,7 +142,7 @@ namespace
 constexpr float kDriveLow    = 5.0f, kDriveHigh = 120.0f;
 constexpr float kDampingLow  = 0.1f, kDampingHigh = 30.0f;
 constexpr double kSlowLow    = 1.0, kSlowHigh = 100.0;
-constexpr float kMaxOverdrive = 8.0f;
+constexpr float kMaxOverdrive = 4.0f;
 constexpr int kMaxBassBins   = 16;
 
 float inverseGeometric( float value, float low, float high )

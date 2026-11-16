@@ -142,12 +142,13 @@ MillpondPlugin::MillpondPlugin()
 
 	//Faraday: off. Shake 0 is v0.1.0 -- not a similar picture, the same passes
 	//(`mptest --faraday-off`). The others are where a first shake should start:
-	//an 8 Hz drive stands a lattice about fifteen wavelengths up the default
-	//1.5 m frame, slow enough at 4 Hz to be seen without the stroboscope, on
-	//a tank that loses 3/s at its walls (Benjamin & Ursell measured 2.7).
+	//a 10 Hz drive stands a lattice about twenty wavelengths up the default
+	//1.5 m frame, slow enough at 5 Hz to be seen without the stroboscope, on
+	//a tank that loses 2/s at its walls (Benjamin & Ursell measured 2.7 in
+	//theirs) -- enough to lie down within two seconds of the bass stopping.
 	params[ PT_SHAKE ]       = 0.0f;
-	params[ PT_DRIVE ]       = ParamFromDrive( 8.0f );
-	params[ PT_DAMPING ]     = ParamFromDamping( 3.0f );
+	params[ PT_DRIVE ]       = ParamFromDrive( 10.0f );
+	params[ PT_DAMPING ]     = ParamFromDamping( 2.0f );
 	params[ PT_SLOW_MOTION ] = ParamFromSlowMotion( 1.0 );
 	params[ PT_PATTERN ]     = static_cast< float >( Pattern::Squares );
 	params[ PT_BASS_BINS ]   = ParamFromBassBins( 2 );
