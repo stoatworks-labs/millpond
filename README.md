@@ -278,6 +278,7 @@ software renderer:
 | frame rate | the shaken water at 60 fps against 40 and 24 fps to 1.1e-5; the clock at Resolume's 5×10⁸ ms gives the water it gives at 0 |
 | negative controls | **18** deliberately wrong models, **all 18** detected; one-character mutants of the four new shaders, every one caught |
 | dead controls | **37** parameters, all live |
+| cost | `mptest --bench` at Detail 1024, one run: shaken at 10 Hz, **1.5 ms/frame at 720p and 1.7 at 1080p**, against 0.95 and 1.0 off. With the default 8× stroboscope the mean is 2.5 and 2.2 ms, and the frames where the water catches up a whole response period cost up to 12 ms (seven passes) |
 
 What isn't verified: anything in a host or on another GPU; the model's
 accuracy against real water (damped Mathieu with Lamb's damping is known to

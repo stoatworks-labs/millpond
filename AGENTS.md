@@ -530,8 +530,11 @@ Asked of each: **would this hold on another rasteriser, at another raster?**
 All of them run at 320×180 and 1280×720 on the GPU and at 320×180 on Apple's
 software renderer, and every number below printed the same at both rasters
 (the water is a grid in metres; only `--resize` reads the raster, and it
-compares bit for bit). The software renderer agreed to the printed digits
-except where noted.
+compares bit for bit). On the software renderer every check passed against
+the same bounds; the physical numbers (heights, wavenumbers, correlations,
+spreads, lags) printed the same digits, and the error measures came out
+within a factor of three of the GPU's either way (the widest:
+`--saturation`'s law at βÃ²dt = 0.6, 4.4e-8 against the GPU's 1.3e-7).
 
 | check | measured (GPU) | bound | why that number |
 | --- | --- | --- | --- |
@@ -559,62 +562,62 @@ its control (141).
 
 `tools/mutate.py` makes one-character mutants of the four Faraday shaders
 and runs the twelve Faraday checks against each at 320×180, on a copy of the
-tree, 120 s a check (a timeout counts as caught). As of the last run, 52 of
-52 caught:
+tree, 120 s a check (a timeout counts as caught). As of the last run, 51 of
+51 caught:
 
 | id | shader | mutation | caught by |
 | --- | --- | --- | --- |
-| E1 | envelope | `state.y / OmegaC` → `*` | mathieu, half, wavelength, saturation, pattern, onset |
-| E2 | envelope | `+ rate` → `- rate` | saturation |
-| E3 | envelope | `RateScale * state.y` → `state.z` | mathieu, half, saturation, pattern, onset |
+| E1 | envelope | `state.y / OmegaC` → `*` | mathieu, half, wavelength, saturation, strobe, pattern, onset |
+| E2 | envelope | `+ rate` → `- rate` | saturation, strobe |
+| E3 | envelope | `RateScale * state.y` → `state.z` | mathieu, half, saturation, strobe, pattern, onset |
 | K1 | kernel | `1.0 - exp` → `+` | pattern |
 | K2 | kernel | `( k - centre )` → `+` | pattern |
 | K3 | kernel | notch at √2 → 2.41 | pattern |
 | K4 | kernel | notch at √3 → 2.73 | pattern |
 | K5 | kernel | `Pattern == 1` → `0` | pattern |
 | K6 | kernel | `Norm * kernel` → `+` | half, pattern |
-| S1 | state | envelope `.x` → `.y` | half, saturation, pattern |
+| S1 | state | envelope `.x` → `.y` | half, saturation, strobe, pattern |
 | S2 | state | `SatRate * envelope` → `+` | mathieu, half, wavelength, saturation, strobe, pattern, onset |
-| S3 | state | `state.y * keep` → `/` | half, wavelength, saturation, pattern |
+| S3 | state | `state.y * keep` → `/` | half, wavelength, saturation, strobe, pattern |
 | S4 | state | expNeg series `0.5` → `0.6` | saturation |
-| V1 | evolve | `+ WallDamping` → `-` | mathieu, saturation, onset |
+| V1 | evolve | `+ WallDamping` → `-` | mathieu, saturation, strobe, onset |
 | V2 | evolve | `Accel * k` → `/` | mathieu, half, wavelength, seed, saturation, strobe, pattern, onset |
 | V3 | evolve | Magnus `0.1443` → `0.2443` | mathieu, rate, onset |
 | V4 | evolve | `omega2 - q * drive.x` → `+` | mathieu, half, wavelength, saturation, strobe, pattern, onset |
 | V5 | evolve | `drive.y` → `drive.x` | mathieu, rate, onset |
-| V6 | evolve | `( w1 + w2 )` → `-` | mathieu, half, saturation, rate, strobe, pattern, onset |
+| V6 | evolve | `( w1 + w2 )` → `-` | mathieu, half, wavelength, saturation, strobe, pattern, onset |
 | V7 | evolve | `corr * ( w2 - w1 )` → `+` | mathieu, rate, onset |
 | V8 | evolve | `- d * d` → `+` | mathieu |
-| V9 | evolve | C series `1/2` → `1/3` | mathieu, wavelength, seed, saturation, rate, onset |
+| V9 | evolve | C series `1/2` → `1/3` | mathieu, wavelength, seed, saturation, rate, strobe, onset |
 | V10 | evolve | S series `1/6` → `1/7` | mathieu, saturation, onset |
 | V11 | evolve | series branch `< 1.0` → `< 9.0` | mathieu |
 | V12 | evolve | `decay * cs.x` → `/` | mathieu, seed, saturation |
-| V13 | evolve | `cs.y / psi` → `*` | mathieu, seed, saturation |
+| V13 | evolve | `cs.y / psi` → `*` | mathieu, seed, saturation, strobe |
 | V14 | evolve | `exp( psi - gamma * h )` → `+` | mathieu |
 | V15 | evolve | `( slow + fast )` → `-` | mathieu |
 | V16 | evolve | `( d + gamma * h ) * eta` → `-` | mathieu, wavelength, saturation, rate, pattern, onset |
 | V17 | evolve | `2.0 * gamma * d` → `3.0` | mathieu |
 | V18 | evolve | `( gamma * h + d ) * rate` → `-` | mathieu, rate, onset |
 | V19 | evolve | drive table row `0` → `1` | mathieu, half, wavelength, saturation, strobe, pattern, onset |
-| V20 | evolve | substep loop from 1 | mathieu, saturation, rate, strobe, onset |
+| V20 | evolve | substep loop from 1 | mathieu, half, wavelength, saturation, rate, strobe, pattern, onset |
 | V21 | evolve | `expNeg( gamma * h )` → `/` | mathieu, half, wavelength, saturation, strobe, pattern, onset |
-| V22 | evolve | `rate / RateScale` → `*` | every check but clock, resize and state-shaken |
+| V22 | evolve | `rate / RateScale` → `*` | mathieu, half, seed, saturation, rate, strobe, pattern, onset |
 | V23 | evolve | `( diff.y, -diff.x )` → `+` | mathieu, seed, rate, strobe, pattern, onset |
 | V24 | evolve | `A2.x - B2.y` → `+` | mathieu, seed, rate, strobe, pattern, onset |
 | V25 | evolve | `- kv.y * A2` → `+` | half |
-| V26 | evolve | Nyquist `/ 2` → `/ 3` | half, wavelength, seed, saturation |
+| V26 | evolve | Nyquist `/ 2` → `/ 3` | mathieu, half, wavelength, seed, saturation, strobe |
 | V27 | evolve | cosSin `1/120` → `1/130` | mathieu |
 | V28 | evolve | cosSin quadrant 1 sign | mathieu |
 | V29 | evolve | cosSin quadrant 2 sign | mathieu |
 | V30 | evolve | cosSin quadrant 3 sign | mathieu |
 | V31 | evolve | cosSin quadrant 0 `c` → `s` | mathieu |
-| D1 | seed | `SeedAmp > 0.0` → `<` | half, wavelength, seed, saturation, pattern |
-| D2 | seed | `SeedAmp * sqrt` → `/` | half |
-| D3 | seed | band `-0.25` → `-0.05` | seed |
-| D4 | seed | TwiddleY conjugate sign | seed |
-| D5 | seed | Hermitian partner sign | half, seed |
-| D6 | seed | `( k - Wavenumber )` → `+` | half, seed |
-| D7 | seed | mirror index `cell.y` → `cell.x` | half, seed |
+| D1 | evolve (seed) | `SeedAmp > 0.0` → `<` | half, wavelength, seed, saturation, strobe, pattern |
+| D2 | evolve (seed) | `SeedAmp * sqrt` → `/` | half |
+| D3 | evolve (seed) | band `-0.25` → `-0.05` | seed |
+| D4 | evolve (seed) | TwiddleY conjugate sign | seed |
+| D5 | evolve (seed) | Hermitian partner sign | half, seed |
+| D6 | evolve (seed) | `( k - Wavenumber )` → `+` | half, seed |
+| D7 | evolve (seed) | mirror index `cell.y` → `cell.x` | seed |
 
 Survivors along the way, and what caught them: E2 and S4 (the saturation's
 envelope and its series) by `--saturation`'s frame-rate and uniform-level
