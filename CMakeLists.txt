@@ -64,6 +64,8 @@ add_library(millpond_core OBJECT
     source/Controls.cpp
     source/Physics.h
     source/Physics.cpp
+    source/Faraday.h
+    source/Faraday.cpp
     source/Audio.h
     source/Audio.cpp
     source/PassBuffer.h

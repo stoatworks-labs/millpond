@@ -2,6 +2,7 @@
 
 #include "Audio.h"
 #include "Controls.h"
+#include "Faraday.h"
 #include "PassBuffer.h"
 #include "Physics.h"
 #include "Shaders.h"
@@ -110,7 +111,80 @@ public:
 	/// round trip, which is what `--fft` measures.
 	void StepForTest( double dt )
 	{
-		Simulate( {}, dt );
+		Simulate( {}, dt, nullptr );
+	}
+
+	//-------------------------------------------------------------------
+	// Faraday, for the harness. What the last frame handed the GPU, so a
+	// check can hold the GPU's water against the ODE at the very forcing it
+	// was given -- rather than against what the controls were meant to give.
+	//-------------------------------------------------------------------
+
+	/// True if the last frame ran shaken.
+	bool FaradayActive() const
+	{
+		return lastShake.active;
+	}
+	/// The shake's acceleration amplitude the last frame used, m/s^2.
+	double FaradayAcceleration() const
+	{
+		return lastShake.accel;
+	}
+	/// The leading-order threshold the Shake control is measured in, m/s^2.
+	double FaradayThreshold() const
+	{
+		return lastShake.threshold;
+	}
+	/// The drive frequency, Hz, and the critical wavenumber the plugin solved
+	/// for it (used for the kernel and the saturation, never as a check's
+	/// expectation).
+	double FaradayDriveHz() const
+	{
+		return lastShake.driveHz;
+	}
+	double FaradayWavenumber() const
+	{
+		return lastShake.wavenumber;
+	}
+	/// The water time the last frame covered, and how many substeps.
+	double FaradayWaterStep() const
+	{
+		return lastShake.waterStep;
+	}
+	int FaradaySteps() const
+	{
+		return lastShake.steps;
+	}
+	/// The drive's phase at the START of the last frame's water, radians.
+	double FaradayDrivePhase() const
+	{
+		return lastShake.theta0;
+	}
+	/// The stroboscope's lag behind the nominal clock, seconds.
+	double FaradayLag() const
+	{
+		return strobe.Lag();
+	}
+	/// The bass envelope, 0..1.
+	float FaradayBass() const
+	{
+		return bass.Level();
+	}
+
+	/// Turn the seed noise off, so two runs at different frame rates carry the
+	/// same deterministic water (the seed is a Wiener process: statistically
+	/// rate-independent, but not the same numbers).
+	void SetSeedForTest( bool on )
+	{
+		seedOn = on;
+	}
+
+	/// The negative control for `--clock`, and nothing else: take the drive's
+	/// phase from the host clock as a float, the trap the fleet found at
+	/// Resolume's 5e8 ms.
+	void SetFloatClockForTest( bool on )
+	{
+		floatClockForTest = on;
 	}
 
 	/// Every impact injected so far, in order. For `--skim` and `--rain`.
@@ -150,7 +224,38 @@ private:
 	bool ensureBuffers( const Grid& wanted, GLsizei width, GLsizei height );
 	bool ensureMesh( int columns, int rows );
 
-	void Simulate( const std::vector< Impact >& impacts, double dt );
+	/// What a shaken frame hands the GPU. Null for an unshaken one, which then
+	/// runs v0.1.0's chain and nothing else.
+	struct Shaken
+	{
+		bool active        = false;
+		double accel       = 0.0;///< m/s^2
+		double threshold   = 0.0;///< m/s^2, leading order
+		double driveHz     = 0.0;
+		double omegaC      = 0.0;///< rad/s, half the drive
+		double wavenumber  = 0.0;///< k_c, rad/m
+		double gammaC      = 0.0;///< the linear damping at k_c, 1/s
+		double walls       = 0.0;///< Damping, 1/s
+		double satRate     = 0.0;///< beta, 1 / ( m^2 s )
+		double seedAmp     = 0.0;///< m
+		double waterStep   = 0.0;///< s
+		double theta0      = 0.0;///< the drive's phase at the frame's start
+		int steps          = 0;
+		int pattern        = 0;
+	};
+
+	void Simulate( const std::vector< Impact >& impacts, double dt, const Shaken* shaken );
+
+	/// The envelope and the saturated, seeded state: passes a to e (Shaders.h).
+	/// Returns the texture the inject pass should read as its state.
+	GLuint ShakeState( const Shaken& shaken, double dt, int walls );
+
+	/// The Faraday buffers, allocated up front like every other.
+	bool ensureFaraday();
+
+	/// Everything a shaken frame needs from the controls and the clocks, and
+	/// the water time it covers. Advances the stroboscope.
+	Shaken PlanShake( double nominal );
 	void Transform( PassBuffer ( &buffers )[ 2 ], int& current, float direction );
 	static GLuint MakeTwiddles( int length );
 	void Caustics( float depth, const float sunTravel[ 3 ], float sunRadiusRadians );
@@ -164,6 +269,12 @@ private:
 	ffglex::FFGLShader blurShader;
 	ffglex::FFGLShader compositeShader;
 
+	ffglex::FFGLShader envelopeShader;
+	ffglex::FFGLShader kernelShader;
+	ffglex::FFGLShader shakeStateShader;
+	ffglex::FFGLShader shakenEvolveShader;
+	bool faradayCompiled = false;///< false: Shake is ignored, the plugin is v0.1.0
+
 	ffglex::FFGLScreenQuad quad;
 
 	PassBuffer spectrum[ 2 ];///< RG32F: the forward transform's ping-pong
@@ -174,6 +285,10 @@ private:
 	int surfaceIndex  = 0;
 	int causticIndex  = 0;
 	bool haveCaustics = false;
+
+	PassBuffer envelope[ 2 ];///< RG32F, grid: the shaken frame's envelope and its transforms
+	GLuint driveTexture = 0; ///< RG32F, kMaxSteps x 1: the drive's cosines, from doubles
+	std::vector< float > driveTable;
 
 	Grid grid;
 	int bufferBanks   = -1;
@@ -221,6 +336,17 @@ private:
 
 	std::vector< Impact > injectedLog;
 	bool logInjected = false;
+
+	//-------------------------------------------------------------------
+	// Faraday.
+	//-------------------------------------------------------------------
+	faraday::Bass bass;
+	faraday::Strobe strobe;
+	Shaken lastShake;
+	bool wasShaken          = false;
+	unsigned int shakeFrame = 0;///< numbers the seed
+	bool seedOn             = true;
+	bool floatClockForTest  = false;
 };
 
 } // namespace millpond

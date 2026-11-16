@@ -66,6 +66,35 @@ extern const char* const kCausticFragmentShader;
 extern const char* const kBlurShader;
 extern const char* const kCompositeShader;
 
+/*
+    ------------------------------------------------------------- Faraday
+
+    Only while the tank is shaken (Shake above 0). None of the eight passes
+    above changes: with Shake at 0 not one of these runs, and the frame is
+    v0.1.0's to the bit. While shaken, a frame is
+
+        a. **envelope**  grid, RG32F. A~^2 = eta^2 + ( eta_t / omega_c )^2 from
+                         the state: the local height of anything oscillating at
+                         the response frequency, the same at every phase of it.
+        b. **fft**       forward, then
+        c. **kernel**    multiply by the pattern kernel K^( |k| ), then
+        d. **fft**       inverse: K * A~^2, what decides stripes, squares or
+                         hexagons (the spec, section 5).
+        e. **state**     the state times exp( -beta K*A~^2 dt ), the saturating
+                         damping, plus the seed noise. This replaces the state
+                         the inject pass reads; inject itself is unchanged.
+        1-2.             inject and the forward transform, as ever.
+        3'. **shaken evolve** every mode as a damped Mathieu oscillator,
+                         sub-stepped with the fourth-order Magnus integrator,
+                         the drive's cosines from a table the CPU filled in
+                         double.
+        4.               the inverse transform, as ever.
+*/
+extern const char* const kFaradayEnvelopeShader;
+extern const char* const kFaradayKernelShader;
+extern const char* const kFaradayStateShader;
+extern const char* const kFaradayEvolveShader;
+
 /// eta_t is carried as eta_t / kRateScale everywhere on the GPU -- in the
 /// surface texture and through both transforms.
 ///

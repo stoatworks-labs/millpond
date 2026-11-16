@@ -20,6 +20,7 @@ namespace millpond
 namespace
 {
 constexpr float kPi = 3.14159265358979324f;
+constexpr double kTwoPiD = 6.28318530717958647692;
 
 /// glGetString returns nullptr when there is no current context, and feeding
 /// that to std::string is undefined behaviour. A logging call must never be
@@ -33,6 +34,7 @@ std::string glStringOrUnknown( GLenum name )
 const char* const kBanksNames[]  = { "Open", "Walls" };
 const char* const kDetailNames[] = { "256", "512", "1024", "2048" };
 const char* const kViewNames[]   = { "Picture", "Height", "Slope", "Caustics" };
+const char* const kPatternNames[] = { "Stripes", "Squares", "Hexagons" };
 
 /// Frames that must agree before the host's clock unit is settled.
 constexpr int kClockVotes = 4;
@@ -78,7 +80,7 @@ int log2Exact( int value )
 // The buttons are declared one per link, so the run in the enum and the run the
 // block actually has must agree. They diverge the day somebody writes a user
 // guide, and this is what says so.
-static_assert( PT_COUNT - PT_ABOUT_TEXT == stoatworks::about::kParamCount,
+static_assert( PT_ABOUT_END - PT_ABOUT_TEXT == stoatworks::about::kParamCount,
                "the About run no longer matches StoatworksAbout.h -- "
                "add or remove a PT_ABOUT_BUTTON_n to match" );
 
@@ -137,6 +139,18 @@ MillpondPlugin::MillpondPlugin()
 
 	params[ PT_VIEW ] = static_cast< float >( View::Picture );
 	params[ PT_MIX ]  = 1.0f;
+
+	//Faraday: off. Shake 0 is v0.1.0 -- not a similar picture, the same passes
+	//(`mptest --faraday-off`). The others are where a first shake should start:
+	//an 8 Hz drive stands a lattice about fifteen wavelengths up the default
+	//1.5 m frame, slow enough at 4 Hz to be seen without the stroboscope, on
+	//a tank that loses 3/s at its walls (Benjamin & Ursell measured 2.7).
+	params[ PT_SHAKE ]       = 0.0f;
+	params[ PT_DRIVE ]       = ParamFromDrive( 8.0f );
+	params[ PT_DAMPING ]     = ParamFromDamping( 3.0f );
+	params[ PT_SLOW_MOTION ] = ParamFromSlowMotion( 1.0 );
+	params[ PT_PATTERN ]     = static_cast< float >( Pattern::Squares );
+	params[ PT_BASS_BINS ]   = ParamFromBassBins( 2 );
 
 	//-------------------------------------------------------------------
 	// Declaration. Every numeric parameter is a plain 0..1 float: the ranges
@@ -225,8 +239,25 @@ MillpondPlugin::MillpondPlugin()
 		for( const auto& b : stoatworks::about::buttons() )
 			SetParamInfo( aboutId++, b.label, FF_TYPE_EVENT, false );
 	}
-	for( unsigned int id = PT_ABOUT_TEXT; id < PT_COUNT; ++id )
+	for( unsigned int id = PT_ABOUT_TEXT; id < PT_ABOUT_END; ++id )
 		SetParamGroup( id, "About" );
+
+	//-------------------------------------------------------------------
+	// Faraday. After the About block because v0.1.0 ended there: a saved
+	// composition stores parameters by index, so new ones can only be
+	// appended. Declared in id order like everything above -- the SDK keeps
+	// them in a list in declaration order.
+	//-------------------------------------------------------------------
+	SetParamInfof( PT_SHAKE, "Shake", FF_TYPE_STANDARD );
+	SetParamInfof( PT_DRIVE, "Drive", FF_TYPE_STANDARD );
+	SetParamInfof( PT_DAMPING, "Damping", FF_TYPE_STANDARD );
+	SetParamInfof( PT_SLOW_MOTION, "Slow Motion", FF_TYPE_STANDARD );
+	SetOptionParamInfo( PT_PATTERN, "Pattern", static_cast< int >( Pattern::Count ), params[ PT_PATTERN ] );
+	for( int i = 0; i < static_cast< int >( Pattern::Count ); ++i )
+		SetParamElementInfo( PT_PATTERN, i, kPatternNames[ i ], static_cast< float >( i ) );
+	SetParamInfof( PT_BASS_BINS, "Bass Bins", FF_TYPE_STANDARD );
+	for( unsigned int id = PT_SHAKE; id <= PT_BASS_BINS; ++id )
+		SetParamGroup( id, "Faraday" );
 }
 
 //---------------------------------------------------------------------------
@@ -271,6 +302,31 @@ FFResult MillpondPlugin::InitGL( const FFGLViewportStruct* vp )
 		FFGLLog::LogToHost( "Millpond: shader failed to compile" );
 		DeInitGL();
 		return FF_FAIL;
+	}
+
+	//The Faraday passes, and only those, may fail on their own: a driver that
+	//refuses one leaves Shake inert and the pond exactly as v0.1.0 drew it,
+	//rather than costing the operator the whole effect. The harness asks
+	//FaradayActive() after every shaken frame, so an inert Shake fails it.
+	const Stage shakenStages[] = {
+		{ &envelopeShader, kVertexShader, kFaradayEnvelopeShader, "faraday envelope" },
+		{ &kernelShader, kVertexShader, kFaradayKernelShader, "faraday kernel" },
+		{ &shakeStateShader, kVertexShader, kFaradayStateShader, "faraday state" },
+		{ &shakenEvolveShader, kVertexShader, kFaradayEvolveShader, "faraday evolve" },
+	};
+	faradayCompiled = true;
+	for( const Stage& stage : shakenStages )
+	{
+		if( stage.shader->Compile( stage.vertex, stage.fragment ) )
+			continue;
+		diag::error( std::string( "the " ) + stage.name + " shader failed to compile - Shake will do nothing" );
+		FFGLLog::LogToHost( "Millpond: a Faraday shader failed to compile; Shake is disabled" );
+		faradayCompiled = false;
+	}
+	if( !faradayCompiled )
+	{
+		for( const Stage& stage : shakenStages )
+			stage.shader->FreeGLResources();
 	}
 
 	if( !quad.Initialise() )
@@ -370,6 +426,36 @@ GLuint MillpondPlugin::MakeTwiddles( int length )
 }
 
 //---------------------------------------------------------------------------
+bool MillpondPlugin::ensureFaraday()
+{
+	//The envelope and its transforms. Nothing in them outlives the frame, so
+	//a resize that reallocates them loses nothing.
+	bool ok = true;
+	for( PassBuffer& buffer : envelope )
+		ok = ok && buffer.Ensure( grid.nx, grid.ny, GL_RG32F, PassBuffer::Sampling::Nearest );
+	if( !ok )
+		return false;
+
+	//The drive table, at its largest, once. Bound and unbound by hand, as the
+	//twiddles are: this runs before anything is bound.
+	if( driveTexture == 0 )
+	{
+		glGenTextures( 1, &driveTexture );
+		if( driveTexture == 0 )
+			return false;
+		const std::vector< float > zeros( static_cast< size_t >( faraday::kMaxSteps ) * 2, 0.0f );
+		glBindTexture( GL_TEXTURE_2D, driveTexture );
+		glTexImage2D( GL_TEXTURE_2D, 0, GL_RG32F, faraday::kMaxSteps, 1, 0, GL_RG, GL_FLOAT, zeros.data() );
+		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST );
+		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST );
+		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+		glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+		glBindTexture( GL_TEXTURE_2D, 0 );
+	}
+	return true;
+}
+
+//---------------------------------------------------------------------------
 bool MillpondPlugin::ensureMesh( int columns, int rows )
 {
 	//The mesh has no vertex data: gl_VertexID is all the caustic pass reads.
@@ -454,6 +540,11 @@ void MillpondPlugin::UpdateAudio( double dt )
 	//further up, the lower the bar an onset has to clear.
 	settings.sensitivity = std::clamp( params[ PT_AUDIO_PEBBLES ], 0.0f, 1.0f );
 	analyser.Update( bins, binCount, static_cast< float >( dt ), settings );
+
+	//The shake's bass, every frame whether shaken or not, so turning Shake up
+	//mid-song finds the envelope already following the music. On the host's
+	//clock, not the water's: the bass is the music's, whatever Speed says.
+	bass.Update( bins, binCount, BassBinsFromParam( params[ PT_BASS_BINS ] ), dt );
 }
 
 //---------------------------------------------------------------------------
@@ -567,6 +658,119 @@ std::vector< Impact > MillpondPlugin::CollectImpacts( double dt )
 }
 
 //---------------------------------------------------------------------------
+MillpondPlugin::Shaken MillpondPlugin::PlanShake( double nominal )
+{
+	Shaken shake;
+	shake.active = true;
+
+	const Water water = CurrentWater();
+	shake.driveHz     = DriveFromParam( params[ PT_DRIVE ] );
+	const double omega = kTwoPiD * shake.driveHz;
+
+	//The response is at half the drive (Faraday 1831; Benjamin & Ursell's
+	//first tongue), at the wavenumber millpond's own dispersion relation
+	//gives that frequency. The plugin solves for k_c only to aim the pattern
+	//kernel and scale the saturation: the lattice itself is whichever modes
+	//the Mathieu step finds unstable, and `--wavelength` measures it.
+	shake.omegaC     = 0.5 * omega;
+	shake.wavenumber = faraday::CriticalWavenumber( shake.omegaC, water );
+	shake.walls      = DampingFromParam( params[ PT_DAMPING ] );
+	shake.gammaC     = faraday::ShakenDamping( shake.wavenumber, water.viscosity, shake.walls );
+	shake.threshold  = faraday::ThresholdAcceleration( shake.wavenumber, shake.omegaC, shake.gammaC, water.depth );
+	shake.accel      = static_cast< double >( ShakeFromParam( params[ PT_SHAKE ] ) * bass.Level() ) * shake.threshold;
+	shake.satRate    = faraday::kSaturation * shake.gammaC * shake.wavenumber * shake.wavenumber;
+	shake.pattern    = optionIndex( params[ PT_PATTERN ], static_cast< int >( Pattern::Count ) );
+
+	//The drive's phase where this frame's water starts: twice the response's,
+	//both kept in double and reduced mod 2 pi every frame, so the shader is
+	//only ever handed cosines and times relative to the frame. The host's
+	//clock is never in it -- it reaches 5e8 ms in Resolume.
+	shake.theta0 = faraday::Wrap( 2.0 * strobe.WaterPhase() );
+	if( floatClockForTest )
+		shake.theta0 = faraday::Wrap( static_cast< double >( static_cast< float >( omega ) * static_cast< float >( now ) ) );
+
+	shake.waterStep = strobe.Advance( nominal, shake.omegaC, SlowMotionFromParam( params[ PT_SLOW_MOTION ] ) );
+	shake.steps     = shake.waterStep > 0.0 ? faraday::DriveTable( shake.theta0, omega, shake.waterStep, driveTable ) : 0;
+	return shake;
+}
+
+//---------------------------------------------------------------------------
+GLuint MillpondPlugin::ShakeState( const Shaken& shake, double dt, int walls )
+{
+	const GLuint state = surface[ surfaceIndex ].TextureID();
+
+	//-------------------------------------------------------------------
+	// a. The envelope, into envelope[ 0 ].
+	//-------------------------------------------------------------------
+	{
+		ScopedFBOBinding fbo( envelope[ 0 ].GetGLID(), ScopedFBOBinding::RB_REVERT );
+		glViewport( 0, 0, grid.nx, grid.ny );
+		ScopedShaderBinding shader( envelopeShader.GetGLID() );
+		ScopedSamplerActivation sampler( 0 );
+		Scoped2DTextureBinding texture( state );
+
+		envelopeShader.Set( "StateTexture", 0 );
+		envelopeShader.Set( "OmegaC", static_cast< float >( shake.omegaC ) );
+		envelopeShader.Set( "RateScale", kRateScale );
+		quad.Draw();
+	}
+	int current = 0;
+
+	//-------------------------------------------------------------------
+	// b to d. The kernel, in Fourier space. Stripes' kernel is 1, and the
+	// round trip would only add its rounding: it is skipped.
+	//-------------------------------------------------------------------
+	if( shake.pattern != static_cast< int >( Pattern::Stripes ) )
+	{
+		Transform( envelope, current, -1.0f );
+		{
+			ScopedFBOBinding fbo( envelope[ 1 - current ].GetGLID(), ScopedFBOBinding::RB_REVERT );
+			glViewport( 0, 0, grid.nx, grid.ny );
+			ScopedShaderBinding shader( kernelShader.GetGLID() );
+			ScopedSamplerActivation sampler( 0 );
+			Scoped2DTextureBinding texture( envelope[ current ].TextureID() );
+
+			kernelShader.Set( "Spectrum", 0 );
+			setInts( kernelShader, "GridSize", grid.nx, grid.ny );
+			kernelShader.Set( "Domain", static_cast< float >( grid.lx ), static_cast< float >( grid.ly ) );
+			kernelShader.Set( "Wavenumber", static_cast< float >( shake.wavenumber ) );
+			kernelShader.Set( "Width", faraday::kNotchWidth );
+			kernelShader.Set( "Pattern", shake.pattern );
+			kernelShader.Set( "Norm", 1.0f / ( static_cast< float >( grid.nx ) * static_cast< float >( grid.ny ) ) );
+			quad.Draw();
+		}
+		current = 1 - current;
+		Transform( envelope, current, 1.0f );
+	}
+
+	//-------------------------------------------------------------------
+	// e. Saturated and seeded, into the other envelope buffer.
+	//-------------------------------------------------------------------
+	const double cellArea = ( grid.lx / grid.nx ) * ( grid.ly / grid.ny );
+	const double seedAmp  = seedOn && dt > 0.0 ? faraday::kSeed * std::sqrt( dt / cellArea ) : 0.0;
+	{
+		ScopedFBOBinding fbo( envelope[ 1 - current ].GetGLID(), ScopedFBOBinding::RB_REVERT );
+		glViewport( 0, 0, grid.nx, grid.ny );
+		ScopedShaderBinding shader( shakeStateShader.GetGLID() );
+		ScopedSamplerActivation sampler0( 0 );
+		Scoped2DTextureBinding stateTexture( state );
+		ScopedSamplerActivation sampler1( 1 );
+		Scoped2DTextureBinding envelopeTexture( envelope[ current ].TextureID() );
+
+		shakeStateShader.Set( "StateTexture", 0 );
+		shakeStateShader.Set( "EnvelopeTexture", 1 );
+		setInts( shakeStateShader, "GridSize", grid.nx, grid.ny );
+		shakeStateShader.Set( "Walls", walls );
+		shakeStateShader.Set( "SatRate", static_cast< float >( shake.satRate ) );
+		shakeStateShader.Set( "Dt", static_cast< float >( dt ) );
+		shakeStateShader.Set( "SeedAmp", static_cast< float >( seedAmp ) );
+		shakeStateShader.Set( "Seed", static_cast< int >( shakeFrame++ & 0x7fffffffu ) );
+		quad.Draw();
+	}
+	return envelope[ 1 - current ].TextureID();
+}
+
+//---------------------------------------------------------------------------
 void MillpondPlugin::Transform( PassBuffer ( &buffers )[ 2 ], int& current, float direction )
 {
 	ScopedShaderBinding shader( fftShader.GetGLID() );
@@ -608,7 +812,7 @@ void MillpondPlugin::Transform( PassBuffer ( &buffers )[ 2 ], int& current, floa
 }
 
 //---------------------------------------------------------------------------
-void MillpondPlugin::Simulate( const std::vector< Impact >& impacts, double dt )
+void MillpondPlugin::Simulate( const std::vector< Impact >& impacts, double dt, const Shaken* shaken )
 {
 	const Water water = CurrentWater();
 	const int walls   = bufferBanks == static_cast< int >( Banks::Walls ) ? 1 : 0;
@@ -642,6 +846,10 @@ void MillpondPlugin::Simulate( const std::vector< Impact >& impacts, double dt )
 	const float margin    = 0.5f * std::min( frameWidth, frameHeight );
 	const float spongeRate = static_cast< float >( 18.0 * fastest ) / std::max( margin, 0.01f );
 
+	//A shaken frame first saturates and seeds the state (passes a to e); the
+	//inject pass then reads that instead of last frame's surface.
+	const GLuint state = shaken ? ShakeState( *shaken, dt, walls ) : surface[ surfaceIndex ].TextureID();
+
 	//-------------------------------------------------------------------
 	// 1. Inject: state times sponge, plus craters, into spectrum[ 0 ].
 	//-------------------------------------------------------------------
@@ -650,7 +858,7 @@ void MillpondPlugin::Simulate( const std::vector< Impact >& impacts, double dt )
 		glViewport( 0, 0, grid.nx, grid.ny );
 		ScopedShaderBinding shader( injectShader.GetGLID() );
 		ScopedSamplerActivation sampler( 0 );
-		Scoped2DTextureBinding texture( surface[ surfaceIndex ].TextureID() );
+		Scoped2DTextureBinding texture( state );
 
 		injectShader.Set( "StateTexture", 0 );
 		setInts( injectShader, "GridSize", grid.nx, grid.ny );
@@ -674,6 +882,34 @@ void MillpondPlugin::Simulate( const std::vector< Impact >& impacts, double dt )
 	// 3. Evolve, into surface[ 0 ]. Last frame's surface has been read by
 	// the inject pass and nothing needs it again.
 	//-------------------------------------------------------------------
+	if( shaken )
+	{
+		ScopedFBOBinding fbo( surface[ 0 ].GetGLID(), ScopedFBOBinding::RB_REVERT );
+		glViewport( 0, 0, grid.nx, grid.ny );
+		ScopedShaderBinding shader( shakenEvolveShader.GetGLID() );
+		ScopedSamplerActivation sampler0( 0 );
+		Scoped2DTextureBinding texture( spectrum[ current ].TextureID() );
+		ScopedSamplerActivation sampler1( 1 );
+		Scoped2DTextureBinding table( driveTexture );
+
+		const int steps = shaken->steps;
+		shakenEvolveShader.Set( "Spectrum", 0 );
+		shakenEvolveShader.Set( "DriveTable", 1 );
+		setInts( shakenEvolveShader, "GridSize", grid.nx, grid.ny );
+		shakenEvolveShader.Set( "Domain", static_cast< float >( grid.lx ), static_cast< float >( grid.ly ) );
+		shakenEvolveShader.Set( "Gravity", static_cast< float >( water.gravity ) );
+		shakenEvolveShader.Set( "Tension", static_cast< float >( water.tension ) );
+		shakenEvolveShader.Set( "Depth", static_cast< float >( water.depth ) );
+		shakenEvolveShader.Set( "Viscosity", static_cast< float >( water.viscosity ) );
+		shakenEvolveShader.Set( "WallDamping", static_cast< float >( shaken->walls ) );
+		shakenEvolveShader.Set( "Accel", static_cast< float >( shaken->accel ) );
+		shakenEvolveShader.Set( "Step", steps > 0 ? static_cast< float >( dt / steps ) : 0.0f );
+		shakenEvolveShader.Set( "Steps", steps );
+		shakenEvolveShader.Set( "Norm", 1.0f / ( static_cast< float >( grid.nx ) * static_cast< float >( grid.ny ) ) );
+		shakenEvolveShader.Set( "RateScale", kRateScale );
+		quad.Draw();
+	}
+	else
 	{
 		ScopedFBOBinding fbo( surface[ 0 ].GetGLID(), ScopedFBOBinding::RB_REVERT );
 		glViewport( 0, 0, grid.nx, grid.ny );
@@ -838,7 +1074,22 @@ FFResult MillpondPlugin::ProcessOpenGL( ProcessOpenGLStruct* pgl )
 	lastNow             = now;
 	UpdateAudio( hostDt );
 
-	const double dt = hostDt * SpeedFromParam( params[ PT_SPEED ] );
+	//The pond's own clock. Unshaken, the water covers exactly this.
+	const double nominal = hostDt * SpeedFromParam( params[ PT_SPEED ] );
+
+	//Faraday. At Shake 0 -- the default, and every v0.1.0 composition --
+	//nothing below runs and the frame is v0.1.0's. Shaken, the stroboscope
+	//decides how much water time the frame covers (Faraday.h).
+	Shaken shake;
+	const bool shaking = faradayCompiled && ShakeFromParam( params[ PT_SHAKE ] ) > 0.0f;
+	if( shaking && !wasShaken )
+		strobe.Reset();
+	if( shaking )
+		shake = PlanShake( nominal );
+	wasShaken = shaking;
+	lastShake = shake;
+
+	const double dt = shaking ? shake.waterStep : nominal;
 	simTime += dt;
 
 	//-------------------------------------------------------------------
@@ -860,6 +1111,29 @@ FFResult MillpondPlugin::ProcessOpenGL( ProcessOpenGLStruct* pgl )
 	grid.lx = wanted.lx;
 	grid.ly = wanted.ly;
 
+	//The shaken frame's buffers and its drive table, up front for the same
+	//reason. A Faraday buffer that will not allocate costs the shake, not the
+	//pond: the frame runs unshaken, which the harness reads as a failure.
+	const Shaken* shaken = nullptr;
+	if( shaking )
+	{
+		if( ensureFaraday() )
+		{
+			if( shake.steps > 0 )
+			{
+				glBindTexture( GL_TEXTURE_2D, driveTexture );
+				glTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, shake.steps, 1, GL_RG, GL_FLOAT, driveTable.data() );
+				glBindTexture( GL_TEXTURE_2D, 0 );
+			}
+			shaken = &shake;
+		}
+		else
+		{
+			diag::error( "could not allocate the Faraday buffers - this frame runs unshaken" );
+			lastShake.active = false;
+		}
+	}
+
 	if( stillWanted )
 	{
 		for( PassBuffer& buffer : surface )
@@ -870,7 +1144,7 @@ FFResult MillpondPlugin::ProcessOpenGL( ProcessOpenGLStruct* pgl )
 
 	const std::vector< Impact > impacts = CollectImpacts( dt );
 	if( dt > 0.0 || !impacts.empty() )
-		Simulate( impacts, dt );
+		Simulate( impacts, dt, shaken );
 
 	//-------------------------------------------------------------------
 	// The light.
@@ -952,6 +1226,11 @@ FFResult MillpondPlugin::DeInitGL()
 	causticShader.FreeGLResources();
 	blurShader.FreeGLResources();
 	compositeShader.FreeGLResources();
+	envelopeShader.FreeGLResources();
+	kernelShader.FreeGLResources();
+	shakeStateShader.FreeGLResources();
+	shakenEvolveShader.FreeGLResources();
+	faradayCompiled = false;
 	quad.Release();
 
 	for( PassBuffer& buffer : spectrum )
@@ -960,6 +1239,11 @@ FFResult MillpondPlugin::DeInitGL()
 		buffer.Destroy();
 	for( PassBuffer& buffer : caustic )
 		buffer.Destroy();
+	for( PassBuffer& buffer : envelope )
+		buffer.Destroy();
+	if( driveTexture != 0 )
+		glDeleteTextures( 1, &driveTexture );
+	driveTexture = 0;
 
 	if( twiddleX != 0 )
 		glDeleteTextures( 1, &twiddleX );
@@ -1053,7 +1337,7 @@ FFResult MillpondPlugin::SetFloatParameter( unsigned int index, float value )
 		return FF_FAIL;
 
 	// The About buttons open a browser and store nothing.
-	if( index >= PT_ABOUT_TEXT )
+	if( index >= PT_ABOUT_TEXT && index < PT_ABOUT_END )
 		return stoatworks::about::handleParam( index - PT_ABOUT_TEXT, value ) ? FF_SUCCESS : FF_FAIL;
 
 	//The three buttons act on the press, once. An event parameter arrives as

@@ -536,4 +536,260 @@ void main()
 }
 )";
 
+//===========================================================================
+// Faraday. Only while the tank is shaken; see Shaders.h.
+//===========================================================================
+
+//---------------------------------------------------------------------------
+// a. The envelope: A~^2 = eta^2 + ( eta_t / omega_c )^2.
+//---------------------------------------------------------------------------
+const char* const kFaradayEnvelopeShader = R"(#version 410 core
+
+uniform sampler2D StateTexture;//(eta, eta_t / RateScale, eta_x, eta_y)
+uniform float OmegaC;          //the response frequency, half the drive, rad/s
+uniform float RateScale;
+
+out vec4 fragColor;
+
+void main()
+{
+	vec4 state = texelFetch( StateTexture, ivec2( gl_FragCoord.xy ), 0 );
+
+	//For a wave at omega_c, eta = A cos and eta_t / omega_c = -A sin: this is
+	//A^2 at every instant of the cycle, so the damping it sets does not depend
+	//on which phase of the oscillation a frame happens to land on.
+	float rate = RateScale * state.y / OmegaC;
+	fragColor  = vec4( state.x * state.x + rate * rate, 0.0, 0.0, 0.0 );
+}
+)";
+
+//---------------------------------------------------------------------------
+// c. The pattern kernel, on the envelope's spectrum.
+//
+// For standing waves sum a_j cos( k_j . x ) on |k| = k_c, the damping
+// K * A~^2 times eta projects onto wave i as
+//     g0 = 1/2 + K( 2 k_c ) / 4                       (itself)
+//     g( theta ) = 1/2 + ( K( 2 k_c sin theta/2 ) + K( 2 k_c cos theta/2 ) ) / 2
+// (worked in AGENTS.md). One standing wave wins when g > g0 at every angle,
+// which a local damping (K = 1) gives; a notch where a pair's beat lands lets
+// that pair share the damping and win instead.
+//---------------------------------------------------------------------------
+const char* const kFaradayKernelShader = R"(#version 410 core
+
+uniform sampler2D Spectrum;//FFT( A~^2 )
+uniform ivec2 GridSize;
+uniform vec2 Domain;
+uniform float Wavenumber;  //k_c, rad/m
+uniform float Width;       //the notches' width, as a fraction of k_c
+uniform int Pattern;       //0 stripes, 1 squares, 2 hexagons
+uniform float Norm;        //1 / ( Nx Ny ): the inverse transform's scale, applied here once
+
+out vec4 fragColor;
+
+float notch( float k, float centre )
+{
+	float x = ( k - centre ) / ( Width * Wavenumber );
+	return 1.0 - exp( -0.5 * x * x );
+}
+
+void main()
+{
+	ivec2 cell = ivec2( gl_FragCoord.xy );
+	ivec2 m    = ivec2( cell.x < GridSize.x / 2 ? cell.x : cell.x - GridSize.x,
+	                    cell.y < GridSize.y / 2 ? cell.y : cell.y - GridSize.y );
+	float k    = length( 6.28318530717958648 * vec2( m ) / Domain );
+
+	float kernel = 1.0;
+	if( Pattern == 1 )
+		kernel = notch( k, 1.41421356237 * Wavenumber );
+	else if( Pattern == 2 )
+		kernel = notch( k, Wavenumber ) * notch( k, 1.73205080757 * Wavenumber );
+
+	fragColor = vec4( Norm * kernel * texelFetch( Spectrum, cell, 0 ).xy, 0.0, 0.0 );
+}
+)";
+
+//---------------------------------------------------------------------------
+// e. The state the inject pass reads: saturated, and seeded.
+//---------------------------------------------------------------------------
+const char* const kFaradayStateShader = R"(#version 410 core
+
+uniform sampler2D StateTexture;   //(eta, eta_t / RateScale, eta_x, eta_y)
+uniform sampler2D EnvelopeTexture;//K * A~^2, m^2, in .x
+uniform ivec2 GridSize;
+uniform int Walls;
+uniform float SatRate;            //beta, 1 / ( m^2 s )
+uniform float Dt;                 //seconds of water this frame
+uniform float SeedAmp;            //this frame's ambient noise, metres RMS a cell
+uniform int Seed;                 //the shaken frame's number
+
+out vec4 fragColor;
+
+uint mixBits( uint x )
+{
+	//lowbias32, as the caustic mesh's jitter: integer, the same on every machine.
+	x ^= x >> 16u;
+	x *= 0x7feb352du;
+	x ^= x >> 15u;
+	x *= 0x846ca68bu;
+	x ^= x >> 16u;
+	return x;
+}
+
+void main()
+{
+	ivec2 cell = ivec2( gl_FragCoord.xy );
+	vec4 state = texelFetch( StateTexture, cell, 0 );
+
+	//The saturating damping. The same form as the Open sponge: both halves of
+	//the state decay together, so it takes energy and shifts no phase. The
+	//envelope can dip below zero where the kernel's notches take out more
+	//than the mean; a damping must not become a gain there.
+	float envelope = max( texelFetch( EnvelopeTexture, cell, 0 ).x, 0.0 );
+	float keep     = exp( -SatRate * envelope * Dt );
+	float eta      = state.x * keep;
+	float rate     = state.y * keep;
+
+	//The seed: white in space, so it chooses neither the wavelength nor the
+	//orientation. With Walls every cell takes its mirror images' number, or
+	//the method of images would no longer hold.
+	ivec2 at = cell;
+	if( Walls != 0 )
+	{
+		if( at.x >= GridSize.x / 2 )
+			at.x = GridSize.x - 1 - at.x;
+		if( at.y >= GridSize.y / 2 )
+			at.y = GridSize.y - 1 - at.y;
+	}
+	uint h  = mixBits( ( uint( at.x ) * 0x9e3779b9u ) ^ mixBits( ( uint( at.y ) + 0x632be5abu ) ^ mixBits( uint( Seed ) ) ) );
+	float u = ( float( h >> 8u ) + 0.5 ) / 16777216.0;
+	eta += SeedAmp * 1.73205081 * ( 2.0 * u - 1.0 );
+
+	fragColor = vec4( eta, rate, 0.0, 0.0 );
+}
+)";
+
+//---------------------------------------------------------------------------
+// 3'. The shaken evolve: every mode a damped Mathieu oscillator.
+//---------------------------------------------------------------------------
+const char* const kFaradayEvolveShader = R"(#version 410 core
+
+uniform sampler2D Spectrum;  //Z = FFT( eta + i eta_t / RateScale )
+uniform sampler2D DriveTable;//RG32F, Steps x 1: cos( drive phase ) at each substep's two Gauss points, from doubles
+uniform ivec2 GridSize;
+uniform vec2 Domain;
+uniform float Gravity;       //m/s^2
+uniform float Tension;       //surface tension over density, m^3/s^2
+uniform float Depth;         //m
+uniform float Viscosity;     //m^2/s
+uniform float WallDamping;   //s^-1, the same for every mode
+uniform float Accel;         //the shake's acceleration amplitude, m/s^2
+uniform float Step;          //the substep, s
+uniform int Steps;
+uniform float Norm;
+uniform float RateScale;
+
+out vec4 fragColor;
+
+void main()
+{
+	ivec2 cell = ivec2( gl_FragCoord.xy );
+
+	//Nyquist, as in the evolve pass.
+	if( cell.x == GridSize.x / 2 || cell.y == GridSize.y / 2 )
+	{
+		fragColor = vec4( 0.0 );
+		return;
+	}
+
+	//Unpack the two real spectra, as in the evolve pass.
+	ivec2 opposite = ivec2( ( GridSize.x - cell.x ) % GridSize.x, ( GridSize.y - cell.y ) % GridSize.y );
+	vec2 z  = texelFetch( Spectrum, cell, 0 ).xy;
+	vec2 zm = texelFetch( Spectrum, opposite, 0 ).xy;
+	zm.y    = -zm.y;
+
+	vec2 A    = 0.5 * ( z + zm );
+	vec2 diff = 0.5 * ( z - zm );
+	vec2 B    = RateScale * vec2( diff.y, -diff.x );
+
+	ivec2 m = ivec2( cell.x < GridSize.x / 2 ? cell.x : cell.x - GridSize.x,
+	                 cell.y < GridSize.y / 2 ? cell.y : cell.y - GridSize.y );
+	vec2 kv = 6.28318530717958648 * vec2( m ) / Domain;
+	float k = length( kv );
+
+	float restoring   = Gravity * k + Tension * k * k * k;//= mirrored
+	float depthFactor = tanh( min( k * Depth, 20.0 ) );   //= mirrored
+	float omega2      = max( restoring * depthFactor, 0.0 );
+	float gamma       = 2.0 * Viscosity * k * k + WallDamping;//= mirrored
+
+	//The shake modulates omega^2 by q cos( theta ): Benjamin & Ursell (2.12),
+	//gravity g - a cos theta in the tank's frame.
+	float q = Accel * k * depthFactor;
+
+	//Fourth-order Magnus, two Gauss points a substep. For y' = M(t) y with
+	//M = [[0, 1], [-w, -2 gamma]] the commutator [M2, M1] is
+	//(w2 - w1) [[1, 0], [-2 gamma, -1]], so the step's exponent is
+	//    E = [[d, h], [-h wbar - 2 gamma d, -2 gamma h - d]],  d = sqrt(3) h^2 ( w2 - w1 ) / 12
+	//with trace -2 gamma h and determinant h^2 wbar - d^2, and
+	//    exp( E ) = exp( -gamma h ) [ C I + S ( E + gamma h I ) ]
+	//with C, S from whichever side of critical damping it is on -- with no
+	//shake, exactly the evolve pass's step.
+	float h     = Step;
+	float decay = exp( -gamma * h );
+	float corr  = 0.144337567 * h * h;
+	vec2 eta    = A;
+	vec2 rate   = B;
+	for( int i = 0; i < Steps; ++i )
+	{
+		vec2 drive = texelFetch( DriveTable, ivec2( i, 0 ), 0 ).xy;
+		float w1   = omega2 - q * drive.x;
+		float w2   = omega2 - q * drive.y;
+		float wbar = 0.5 * ( w1 + w2 );
+		float d    = corr * ( w2 - w1 );
+		float disc = h * h * ( wbar - gamma * gamma ) - d * d;
+
+		float C;
+		float S;
+		if( disc > 0.0 )
+		{
+			float psi = sqrt( disc );
+			C         = decay * cos( psi );
+			S         = decay * sin( psi ) / psi;
+		}
+		else
+		{
+			float psi = sqrt( -disc );
+			if( psi < 1e-4 )
+			{
+				C = decay;
+				S = decay;
+			}
+			else
+			{
+				//cosh and sinh times the decay, so neither half overflows
+				//before the other can cancel it.
+				float slow = exp( psi - gamma * h );
+				float fast = exp( -psi - gamma * h );
+				C          = 0.5 * ( slow + fast );
+				S          = 0.5 * ( slow - fast ) / psi;
+			}
+		}
+
+		vec2 etaNext  = C * eta + S * ( ( d + gamma * h ) * eta + h * rate );
+		vec2 rateNext = C * rate - S * ( ( h * wbar + 2.0 * gamma * d ) * eta + ( gamma * h + d ) * rate );
+		eta           = etaNext;
+		rate          = rateNext;
+	}
+
+	vec2 A2 = eta;
+	vec2 B2 = rate / RateScale;
+
+	//Pack for the way back, as in the evolve pass.
+	vec2 state = vec2( A2.x - B2.y, A2.y + B2.x );
+	vec2 slope = vec2( -kv.x * A2.y, kv.x * A2.x ) - kv.y * A2;
+
+	fragColor = Norm * vec4( state, slope );
+}
+)";
+
 } // namespace millpond

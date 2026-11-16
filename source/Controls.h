@@ -97,8 +97,29 @@ enum ParamId : unsigned int
 	PT_ABOUT_BUTTON_1,
 	PT_ABOUT_BUTTON_2,
 	PT_ABOUT_BUTTON_3,
+
+	// -- Faraday ------------------------------------------------------------
+	// The tank shaken up and down by the bass (SPEC-millpond-faraday.md).
+	//
+	// Appended AFTER the About run, not before it: v0.1.0 compositions store
+	// parameters by index and the About run was last, so this is the only
+	// place six new ids can go without moving one an operator has saved. The
+	// group therefore shows after About. A user guide's link button, should
+	// one ever be added, has to go after this group too.
+	//
+	// Shake at 0 is off: none of the Faraday code runs and millpond is v0.1.0
+	// bit for bit, whatever the other five say.
+	PT_SHAKE,
+	PT_DRIVE,
+	PT_DAMPING,
+	PT_SLOW_MOTION,
+	PT_PATTERN,
+	PT_BASS_BINS,
 	PT_COUNT
 };
+
+/// One past the About run: the first id that is not an About line or button.
+constexpr unsigned int PT_ABOUT_END = PT_SHAKE;
 
 /// What happens at the edge of the frame.
 enum class Banks
@@ -117,6 +138,20 @@ enum class View
 	Height,
 	Slope,
 	Caustics,
+
+	Count
+};
+
+/// Which standing-wave lattice the shaken pond settles into. The model does
+/// not derive the cubic coupling g(theta) that decides it (Chen & Vinals do,
+/// from the fluid's numbers); it takes the shape of g(theta) from this, and
+/// the dynamics then pick the pattern that minimises the amplitude equations'
+/// Lyapunov function. See the spec, section 5.
+enum class Pattern
+{
+	Stripes = 0,///< one standing wave: local nonlinear damping
+	Squares,    ///< two at 90 degrees: the damping blind to their beat at sqrt(2) k
+	Hexagons,   ///< three at 60 degrees: blind to the beats at k and sqrt(3) k
 
 	Count
 };
@@ -216,6 +251,37 @@ float ReflectionFromParam( float value );
 /// the sky -- a glint is a point where 2% of that is still far past white.
 /// A range that topped out at 30 (the first one did) could never make one.
 float GlintFromParam( float value );
+
+//---------------------------------------------------------------------------
+// Faraday. All of these do nothing while Shake is 0.
+//---------------------------------------------------------------------------
+
+/// How far past the first Mathieu tongue's threshold the loudest bass drives
+/// the tank: 0 to 8 times, linearly. 0 is off. In units of the threshold, not
+/// of g, because the threshold moves by two orders of magnitude across Drive.
+float ShakeFromParam( float value );
+
+/// The tank's shaking frequency, 5 to 120 Hz, geometrically. The lattice
+/// answers at half of it, with the wavenumber millpond's dispersion relation
+/// gives at that frequency.
+float DriveFromParam( float value );
+float ParamFromDrive( float hertz );
+
+/// The walls' extra linear damping, s^-1, added to Lamb's 2 nu k^2 for every
+/// mode: exactly 0 at the bottom of the travel, then 0.1 to 30, geometrically.
+/// The default 3 is Benjamin & Ursell's measured tube, in their units 0.027.
+float DampingFromParam( float value );
+float ParamFromDamping( float rate );
+
+/// The stroboscope's slow-down, 1 to 100 times, geometrically. 1 is off.
+double SlowMotionFromParam( float value );
+float ParamFromSlowMotion( double factor );
+
+/// How many of the host's lowest FFT bins count as the bass: 1 to 16. The
+/// bins' frequencies have never been measured, so this is the assumption,
+/// exposed rather than hidden.
+int BassBinsFromParam( float value );
+float ParamFromBassBins( int bins );
 
 /// The skim physics' gravity. Not a control: it is the same g the waves use.
 constexpr float kGravity = 9.81f;
