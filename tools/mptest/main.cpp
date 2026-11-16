@@ -4138,17 +4138,25 @@ int runBench()
 	//Faraday: the same busy frame, off and shaken, in one run so the rows
 	//compare. Shaken at 10 Hz (six substeps a 60 fps frame, Squares, so the
 	//kernel's two transforms run too), and at 120 Hz with Speed at 4 (256
-	//substeps a frame): the substeps are the cost that grows. The stroboscope
-	//off, so every frame costs the same; with it on, a frame that jumps a
-	//response period costs that period's substeps (64 at 10 Hz).
-	std::printf( "\n  Faraday (Detail 1024, rain 0.5, a steady bass):\n" );
+	//substeps a frame, in two 1/30 s chunks): the substeps are the cost that
+	//grows. Those with the stroboscope off, so every frame costs the same.
+	//Then the defaults, Slow Motion 8: most frames step a few milliseconds of
+	//water, and every fourteenth or so jumps a response period (0.2 s), run as
+	//seven 1/30 s chunks -- so the worst frame is reported beside the mean.
+	//The mean is timed as the rows above are, 120 frames behind one
+	//glFinish; the worst from another 120 each behind its own, which adds
+	//the GPU's round trip (about 0.6 ms here) to it.
+	std::printf( "\n  Faraday (Detail 1024, rain 0.5, a steady bass; mean of 120 frames, worst of 120 more):\n" );
 	struct Shake
 	{
 		const char* name;
 		float shake;
-		double driveHz, speed;
+		double driveHz, speed, slow;
 	};
-	const Shake shakes[] = { { "off", 0.0f, 10.0, 1.0 }, { "10 Hz", 1.0f, 10.0, 1.0 }, { "120 Hz x4", 1.0f, 120.0, 4.0 } };
+	const Shake shakes[] = { { "off", 0.0f, 10.0, 1.0, 1.0 },
+		                     { "10 Hz", 1.0f, 10.0, 1.0, 1.0 },
+		                     { "120 Hz x4", 1.0f, 120.0, 4.0, 1.0 },
+		                     { "10 Hz, S 8", 1.0f, 10.0, 1.0, 8.0 } };
 	const Size faradaySizes[] = { { 1280, 720, "720p", 1024 }, { 1920, 1080, "1080p", 1024 } };
 	for( const Size& size : faradaySizes )
 		for( const Shake& shake : shakes )
@@ -4161,22 +4169,38 @@ int runBench()
 			rig.Set( PT_SHAKE, shake.shake );
 			rig.Set( PT_DRIVE, ParamFromDrive( static_cast< float >( shake.driveHz ) ) );
 			rig.Set( PT_SPEED, ParamFromSpeed( static_cast< float >( shake.speed ) ) );
-			rig.Set( PT_SLOW_MOTION, ParamFromSlowMotion( 1.0 ) );
+			rig.Set( PT_SLOW_MOTION, ParamFromSlowMotion( shake.slow ) );
 			rig.feed = AudioFeed::Drone;
 			if( !rig.Render( 20 ) )
 				return 1;
 			glFinish();
 
-			constexpr int kTimed = 60;
-			const auto start     = std::chrono::steady_clock::now();
+			constexpr int kTimed = 120;
+			const auto begin     = std::chrono::steady_clock::now();
 			if( !rig.Render( kTimed ) )
 				return 1;
 			glFinish();
-			const auto end = std::chrono::steady_clock::now();
 			const double ms =
-				std::chrono::duration< double, std::milli >( end - start ).count() / static_cast< double >( kTimed );
-			std::printf( "  %-6s %-10s %6.2f ms/frame  (%4.1f%% of 60 fps; %d substeps a frame)\n", size.name, shake.name,
-			             ms, 100.0 * ms / ( 1000.0 / 60.0 ), rig.plugin.FaradayActive() ? rig.plugin.FaradaySteps() : 0 );
+				std::chrono::duration< double, std::milli >( std::chrono::steady_clock::now() - begin ).count() / kTimed;
+
+			double worst  = 0.0;
+			int mostSteps = 0, mostChunks = 0;
+			for( int f = 0; f < kTimed; ++f )
+			{
+				const auto start = std::chrono::steady_clock::now();
+				if( !rig.Render( 1 ) )
+					return 1;
+				glFinish();
+				worst = std::max( worst, std::chrono::duration< double, std::milli >( std::chrono::steady_clock::now() - start ).count() );
+				if( rig.plugin.FaradayActive() )
+				{
+					mostSteps  = std::max( mostSteps, rig.plugin.FaradaySteps() );
+					mostChunks = std::max( mostChunks, rig.plugin.FaradayChunks() );
+				}
+			}
+			std::printf( "  %-6s %-10s %6.2f ms/frame, worst %5.2f  (%4.1f%% of 60 fps; up to %d substeps in %d pass%s)\n",
+			             size.name, shake.name, ms, worst, 100.0 * ms / ( 1000.0 / 60.0 ), mostSteps, std::max( mostChunks, 1 ),
+			             mostChunks > 1 ? "es" : "" );
 		}
 	return 0;
 }

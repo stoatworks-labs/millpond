@@ -11,7 +11,7 @@
 #
 # SKIP_SOFTWARE=1 leaves out the Faraday checks on Apple's software renderer
 # (about twenty minutes); MUTANTS=1 adds the Faraday shader mutants (about
-# eight). Both are part of the claim the README makes: skip them only while
+# ten). Both are part of the claim the README makes: skip them only while
 # iterating.
 #
 set -euo pipefail
