@@ -260,9 +260,9 @@ float GlintFromParam( float value );
 /// the tank: 0 to 4 times, linearly. 0 is off. In units of the threshold, not
 /// of g, because the threshold moves with Drive, Damping and the water. Not
 /// further than 4: the fastest-growing wavenumber moves off k_c as the shake
-/// grows. At the defaults the lattice measured 7% short at 4x, and the
-/// leading-order growth rate puts the fastest mode 60% short at 8x
-/// (AGENTS.md).
+/// grows. At the defaults the lattice's wavenumber measured 7% above k_c at
+/// 4x, and the leading-order growth rate puts the fastest-growing one 60%
+/// above at 8x (AGENTS.md).
 float ShakeFromParam( float value );
 
 /// The tank's shaking frequency, 5 to 120 Hz, geometrically. The lattice

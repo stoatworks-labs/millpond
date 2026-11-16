@@ -153,10 +153,39 @@ started.
 - **Output:** View shows *Picture*, the effect. It can also show one model on
   its own: *Height*, *Slope* or *Caustics*, which also work as a source of
   pure water patterns. Mix.
+- **Faraday:** the tank shaken up and down by the bass (below). Shake (0 is
+  off, and the pond is exactly as it was; 1 drives the loudest bass to four
+  times the threshold), Drive (5 to 120 Hz, default 10), Damping (the walls'
+  loss, 0 to 30 per second, default 2), Slow Motion (a stroboscope, 1 to
+  100×, default 8), Pattern (Stripes, Squares or Hexagons) and Bass Bins
+  (how many of the host's lowest FFT bins count as bass, default 2). They
+  sit after the About block, so v0.1.0 compositions load unchanged.
 
 A camera looking straight down only sees the sun in a facet tilted by half the
 sun's zenith angle. Ripples rarely tilt more than a few degrees, so glints
 need a high sun, and the default is 85°.
+
+### Faraday waves
+
+Shake a tray of water up and down and, past a threshold, the surface stands up
+in a lattice that rises and falls at exactly half the shaking frequency
+(Faraday saw it in 1831). Here the bass does the shaking. In the tank's frame
+gravity becomes g − a cos Ωt, and every wave millpond already rings becomes a
+damped Mathieu oscillator. Above the first instability tongue the waves at
+half the drive grow. Nothing about the lattice is drawn: its spacing is the
+same dispersion relation solved at Ω/2, its onset is the tongue, and the bed
+is seen through it by the same optics. A nonlinear damping on the waves'
+envelope holds the lattice at a finite height, and a kernel in that damping
+decides whether stripes, squares or hexagons win. At full Shake the pond
+stands up in about two seconds; when the bass drops, the lattice lies down
+at the Damping's rate (2 per second by default).
+
+The lattice oscillates at 5 Hz at the default 10 Hz drive. Unslowed, that's a
+high-contrast pattern reversing ten times a second, so **Slow Motion is a
+stroboscope and is on at 8× by default**. The water keeps real time, so the
+lattice still stands up and lies down with the music, but the oscillation is
+seen 8 times slower. Anything that isn't the lattice (rain, pebbles) is seen
+in jumps. Slow Motion 1 turns it off.
 
 ## Status
 
@@ -235,6 +264,27 @@ What **isn't** verified yet:
   slower one. `--banks` measures it on a half-metre pond; nothing has measured
   the reflection of a sponge that strong on the shortest ripples.
 
+**Faraday waves** are new since v0.1.0 and have never been loaded into a
+host. Measured on this Mac, on the GPU at 320×180 and 1280×720 and on Apple's
+software renderer:
+
+| | |
+| --- | --- |
+| the response | one drive period on, the lattice is upside down (correlation **−0.9998**); twenty on, still in step: f/2 to better than 0.7% |
+| the onset | **2.69101** m/s² from the GPU's growth rates, against the exact damped Mathieu tongue's 2.69081 (7e-5); 5e-5 for a capillary lattice |
+| the wavelength | **406.69** rad/m against the dispersion relation's 406.61 at f/2 (0.02%) |
+| each mode | against the damped Mathieu equation solved in double, below and above threshold, detuned, capillary, short and overdamped: within the integrator's own truncation plus float rounding |
+| Shake 0 | the output, surface and caustics of ten scenes at two rasters **bit-identical** to the build before Faraday, with the other five controls at their defaults and at their far ends |
+| frame rate | the shaken water at 60 and 30 fps to 2e-5; the clock at Resolume's 5×10⁸ ms gives the water it gives at 0 |
+| negative controls | **18** deliberately wrong models, **all 18** detected; one-character mutants of the four new shaders, every one caught |
+| dead controls | **37** parameters, all live |
+
+What isn't verified: anything in a host or on another GPU; the model's
+accuracy against real water (damped Mathieu with Lamb's damping is known to
+be quantitatively off, and the waves stay linear even at the steepness a full
+Shake reaches); a pattern chosen from the fluid's own physics rather than by
+the Pattern control; and what Resolume's FFT bins are.
+
 **Browser demo:** [millpond-demo.stoatworks-labs.com](https://millpond-demo.stoatworks-labs.com)
 runs the plugin's eight shaders (the FFT, the exact propagator, the caustic
 mesh and the composite) ported to WebGL2, and `demo/tools/check_shaders.py`
@@ -242,7 +292,7 @@ holds that GLSL character-for-character against `source/Shaders.cpp`
 (`tools/verify.sh` runs it). The CPU half (the controls, the skim schedule, the
 PCG rain, the grid and the frame sequence) is a hand translation to JavaScript
 that nothing checks but somebody reading it. Drop, Skim and Still are buttons there; the
-audio controls are absent.
+audio controls and the Faraday controls are absent.
 
 ## Build
 
@@ -276,7 +326,27 @@ The offline harness renders the plugin's own class headless:
     ./build/mptest --negative             every check above, against a wrong model
     ./build/mptest --bench                720p through 4K
     python3 tools/sweep.py                no control is silently dead
-    tools/verify.sh                       all of it, in about eighty seconds
+    tools/verify.sh                       all of it
+
+The Faraday checks (each also takes `--size WxH`, and
+`MPTEST_RENDERER=software` runs it on Apple's software renderer):
+
+    ./build/mptest --mathieu              one mode on the GPU against the damped Mathieu equation in double
+    ./build/mptest --onset                where a mode starts to grow, against the exact Floquet tongue
+    ./build/mptest --half                 the lattice answers at exactly half the drive
+    ./build/mptest --wavelength           its spacing is the dispersion relation at f/2
+    ./build/mptest --seed                 the seed is small, near k_c, and mirrored at Walls
+    ./build/mptest --saturation           the lattice stands at one height at any frame rate
+    ./build/mptest --pattern              Stripes, Squares and Hexagons stand up as themselves
+    ./build/mptest --strobe               Slow Motion shows the real-time water, slowed
+    ./build/mptest --clock                at Resolume's 5e8 ms the water is the water at 0
+    ./build/mptest --resize               a raster change keeps the shaken water
+    ./build/mptest --faraday-off          at Shake 0 the other Faraday controls change nothing
+    ./build/mptest --rate                 the shaken water is the same at 60 and 30 fps
+    ./build/mptest --state-shaken         the host's GL state, with every Faraday pass run
+    ./build/mptest --faraday-negative     every Faraday check, against a wrong model
+    tools/offcompare.sh                   Shake 0 against the last build before Faraday, bit for bit
+    python3 tools/mutate.py               one-character mutants of the Faraday shaders
 
 Filming uses the fleet's frame format and cue sheets:
 
