@@ -457,8 +457,9 @@ product):
 For N equal waves at equal angles the steady amplitude is
 A² = α/(g0 + Σ_{m≠1} g(θ_m)), and the Lyapunov function is lowest for the
 largest N/(g0 + Σ g) (Chen & Viñals (4.1); Edwards & Fauve (9)). With the
-plugin's Gaussian notches (width 0.25 k_c, so g at the notch is not exactly
-1/2 elsewhere):
+plugin's Gaussian notches (width 0.25 k_c), g at a notched beat is exactly
+1/2, and the notches' tails pull K̂ a little under 1 at the other
+wavenumbers, which is why g0 is under 0.75 in the Squares and Hexagons rows:
 
 | Pattern | K̂ | g0 | g(90°) | g(60°) | stripes 1/g0 | squares 2/(g0+g90) | hexagons 3/(g0+2g60) |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -534,18 +535,18 @@ except where noted.
 
 | check | measured (GPU) | bound | why that number |
 | --- | --- | --- | --- |
-| `--mathieu` | 4e-6 to 3.5e-4 of \|y\| for the lattice, capillary, syrup and short waves at ψ up to 4.7; 1.35e-2 at ψ = 6.3 | the scheme's truncation (Magnus in double vs RK4, 2000 steps a frame) + 1e-5 + 16 ulp a substep | rounding a few ulp a substep, plus what the scheme itself gets wrong, measured in the same run. At ψ ≈ 2π the scheme's own truncation is 1.3% over 0.3 s: the check says the GPU is the scheme there, not that the scheme is right |
-| `--onset` | onset 2.69101 m/s² vs the exact tongue 2.69081 (+7.3e-5); capillary +5.4e-5 | 5.6e-4, 9.4e-4 | each amplitude to `--mathieu`'s 1e-3, so each rate to 2e-3 over 2 s, through the slope of rate against shake; plus the straight-line interpolation's own bias, computed from the exact rates |
-| `--half` | one drive period on, correlation −0.9998; two, +0.9991; twenty, +0.9470 | < −0.9, > +0.9 | 0.9 = cos 0.45 rad: twenty drive periods on, a response off f/2 by more than 0.7% falls below it. Slopes = η's gradient to 9.1e-7 (bound 1e-4: float transforms round at 1e-6) |
-| `--wavelength` | lattice 406.69 rad/m vs ω(k) = πf at 406.61 (+0.02%) | inside the growing band, ±2.63% | the lattice can only be made of modes whose exact Floquet exponent is positive at the shake used |
+| `--mathieu` | 4e-6 to 3.8e-4 of \|y\| for the lattice, capillary, syrup and short waves at ψ up to 4.7; 1.35e-2 at ψ = 6.3 | the scheme's truncation (Magnus in double vs RK4, 2000 steps a frame) + 1e-5 + 16 ulp a substep | rounding a few ulp a substep, plus what the scheme itself gets wrong, measured in the same run. At ψ ≈ 2π the scheme's own truncation is 1.3% over 0.3 s: the check says the GPU is the scheme there, not that the scheme is right |
+| `--onset` | onset 2.69101 m/s² vs the exact tongue 2.69081 (+7.2e-5); capillary +5.4e-5 | 5.6e-4, 9.4e-4 | each amplitude to `--mathieu`'s 1e-3, so each rate to 2e-3 over 2 s, through the slope of rate against shake; plus the straight-line interpolation's own bias, computed from the exact rates |
+| `--half` | one drive period on, correlation −0.9998; two, +0.9992; twenty, +0.9517 | < −0.9, > +0.9 | 0.9 = cos 0.45 rad: twenty drive periods on, a response off f/2 by more than 0.7% falls below it. Slopes = η's gradient to 9.2e-7 (bound 1e-4: float transforms round at 1e-6) |
+| `--wavelength` | lattice 406.88 rad/m vs ω(k) = πf at 406.61 (+0.07%) | inside the growing band, ±2.63% | the lattice can only be made of modes whose exact Floquet exponent is positive at the shake used |
 | `--seed` | η_t/ω_c at 1.0e-7 of η; 0.29% / 0.22% of the power beyond 3 sd of k_c; Walls mirror 1.2e-6 | 1e-4; 1%; 1e-4 | a Gaussian leaves 0.27% beyond 3 sd; float transforms round at 1e-6. Software: 1.1e-7 |
 | `--saturation` | uniform level kept 0.913931 and 0.548812, errors 2e-8 and 1.3e-7; heights at 60, 40, 24 fps and Speed 4 within ×1.067 | 1e-5; ×1.395 | the level is a sum over every cell; ×1.395 is the envelope's swing in the neutral Floquet solution, squared (a height read at the end is one phase's) |
-| `--pattern` | Stripes coherence 0.82; Squares autocorrelation at 90° +0.76; Hexagons at 60° +0.64 | 0.5 | the midpoint between a perfect lattice (1) and none (0) |
+| `--pattern` | Stripes coherence 0.81; Squares autocorrelation at 90° +0.67; Hexagons at 60° +0.68 | 0.5 | the midpoint between a perfect lattice (1) and none (0) |
 | `--strobe` | lag 0 to 0.198 s; zeros 0.8008 s apart (expect 0.8000); strobed = real-time water to 2.4e-5; at 4× the strobed envelope ×1.015 / ×0.985 of the unstrobed | one response period; 2 frames over N−1 gaps; 1e-4; ×1.07 | each crossing placed to a frame; 1e-4 is the Magnus difference between two substep counts; ×1.07 is `--saturation`'s measured frame-step spread rounded up — a machine's measurement, not a derivation |
 | `--clock` | RMS 1.4e-6; drive phase 4.188804936 vs 4.188804935 | 1e-4; 1e-6 rad | a double holds 4.99×10⁵ s to 6e-11 s, so the phase to 4e-9 rad; 1e-4 is room for a texel rounding the other way |
 | `--resize` | 0 of 131072 surface floats differ | exact | a same-aspect resize keeps the grid, so nothing may change |
 | `--faraday-off` | 0 differing floats with the other five controls at their far ends | exact | Shake 0 runs none of it |
-| `--rate` | 60 vs 30 fps, RMS 2.07e-5 | 1.5e-3 | each run within `--mathieu`'s budget of the truth, so within twice it of each other |
+| `--rate` | 60 vs 40 fps (one pass a frame, 9 substeps against 6), RMS 2.3e-6; 60 vs 24 fps (two passes a frame), 1.1e-5 | 1.6e-3, 1.5e-3 | each run within `--mathieu`'s budget of the truth, so within twice it of each other. Not 30 fps: a 1/30 s frame is split into two 1/60 s passes, so it matched 60 fps bit for bit, a pass by construction |
 | `--state-shaken` | 0 wrong | exact | as `--state`, with every Faraday pass run |
 | `offcompare.sh` | 122 files at two rasters bit-identical to 64f9690's build | exact | two processes on one GPU are deterministic. GPU only: the software renderer is not deterministic across builds |
 

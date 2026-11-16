@@ -3810,9 +3810,14 @@ int runFaradayOff( const Perturb& perturb )
 //===========================================================================
 int runRate( const Perturb& perturb )
 {
-	std::printf( "\n=== rate: the shaken water is the same at 60 and 30 fps\n" );
+	std::printf( "\n=== rate: the shaken water is the same at 60, 40 and 24 fps\n" );
 
-	auto run = [ & ]( double fps, int frames, Floats& out, int& substeps ) {
+	//Not 30 fps: a frame of exactly 1/30 s is split into two chunks of 1/60
+	//(faraday::kMaxShakenStep), so 30 fps runs the very passes 60 fps runs
+	//and matched it bit for bit -- a pass by construction. 40 fps is one pass
+	//a frame on a different substep grid (9 substeps a frame against 6); 24 fps
+	//is two chunks a frame of 7 substeps each.
+	auto run = [ & ]( double fps, int frames, Floats& out, int& substeps, int& passes ) {
 		Rig rig;
 		rig.fps = fps;
 		if( !rig.Init( g_checkWidth, g_checkHeight ) )
@@ -3835,26 +3840,41 @@ int runRate( const Perturb& perturb )
 		setup.overdrive = 2.0;
 		applyShake( rig, setup );
 		substeps = 0;
+		passes   = 0;
 		for( int f = 0; f < frames; ++f )
 		{
 			if( !rig.Render( 1 ) || !requireShaken( rig, "rate" ) )
 				return false;
 			substeps += rig.plugin.FaradaySteps();
+			passes += rig.plugin.FaradayChunks();
 		}
 		out = rig.Surface();
 		return true;
 	};
-	Floats sixty, thirty;
-	int stepsSixty = 0, stepsThirty = 0;
-	if( !run( 60.0, 120 - perturb.rateShift, sixty, stepsSixty ) || !run( 30.0, 60, thirty, stepsThirty ) )
+	Floats sixty;
+	int stepsSixty = 0, passesSixty = 0;
+	if( !run( 60.0, 120 - perturb.rateShift, sixty, stepsSixty, passesSixty ) )
 		return 1;
-
-	//Each run is within the --mathieu budget of the true solution, so they
-	//are within the sum of the two budgets of each other.
-	const double bound = 2.0 * 1e-4 + 16.0 * 6e-8 * ( stepsSixty + stepsThirty );
-	const double diff  = relativeDifference( sixty, thirty );
-	Check( diff < bound, fmt( "two seconds of two shaken modes: RMS difference %.2e (bound %.1e; %d and %d substeps)", diff,
-	                          bound, stepsSixty, stepsThirty ) );
+	const struct
+	{
+		double fps;
+		int frames;
+	} others[] = { { 40.0, 80 }, { 24.0, 48 } };
+	for( const auto& o : others )
+	{
+		Floats water;
+		int steps = 0, passes = 0;
+		if( !run( o.fps, o.frames, water, steps, passes ) )
+			return 1;
+		//Each run is within the --mathieu budget of the true solution, so
+		//they are within the sum of the two budgets of each other.
+		const double bound = 2.0 * 1e-4 + 16.0 * 6e-8 * ( stepsSixty + steps );
+		const double diff  = relativeDifference( sixty, water );
+		Check( diff < bound,
+		       fmt( "two seconds of two shaken modes, 60 against %.0f fps: RMS difference %.2e (bound %.1e; %d substeps in "
+		            "%d passes against %d in %d)",
+		            o.fps, diff, bound, stepsSixty, passesSixty, steps, passes ) );
+	}
 	return Verdict();
 }
 
@@ -3925,7 +3945,7 @@ int runFaradayNegative()
 	{
 		Perturb p;
 		p.rateShift = 1;
-		cases.push_back( { "rate", runRate, p, "hold the 30 fps water against the 60 fps water a frame earlier" } );
+		cases.push_back( { "rate", runRate, p, "hold the 40 and 24 fps water against the 60 fps water a frame earlier" } );
 	}
 	{
 		Perturb p;

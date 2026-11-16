@@ -272,10 +272,10 @@ software renderer:
 | --- | --- |
 | the response | one drive period on, the lattice is upside down (correlation **−0.9998**); twenty on, still in step: f/2 to better than 0.7% |
 | the onset | **2.69101** m/s² from the GPU's growth rates, against the exact damped Mathieu tongue's 2.69081 (7e-5); 5e-5 for a capillary lattice |
-| the wavelength | **406.69** rad/m against the dispersion relation's 406.61 at f/2 (0.02%) |
+| the wavelength | **406.88** rad/m against the dispersion relation's 406.61 at f/2 (0.07%) |
 | each mode | against the damped Mathieu equation solved in double, below and above threshold, detuned, capillary, short and overdamped: within the integrator's own truncation plus float rounding |
 | Shake 0 | the output, surface and caustics of ten scenes at two rasters **bit-identical** to the build before Faraday, with the other five controls at their defaults and at their far ends |
-| frame rate | the shaken water at 60 and 30 fps to 2e-5; the clock at Resolume's 5×10⁸ ms gives the water it gives at 0 |
+| frame rate | the shaken water at 60 fps against 40 and 24 fps to 1.1e-5; the clock at Resolume's 5×10⁸ ms gives the water it gives at 0 |
 | negative controls | **18** deliberately wrong models, **all 18** detected; one-character mutants of the four new shaders, every one caught |
 | dead controls | **37** parameters, all live |
 
@@ -342,7 +342,7 @@ The Faraday checks (each also takes `--size WxH`, and
     ./build/mptest --clock                at Resolume's 5e8 ms the water is the water at 0
     ./build/mptest --resize               a raster change keeps the shaken water
     ./build/mptest --faraday-off          at Shake 0 the other Faraday controls change nothing
-    ./build/mptest --rate                 the shaken water is the same at 60 and 30 fps
+    ./build/mptest --rate                 the shaken water is the same at 60, 40 and 24 fps
     ./build/mptest --state-shaken         the host's GL state, with every Faraday pass run
     ./build/mptest --faraday-negative     every Faraday check, against a wrong model
     tools/offcompare.sh                   Shake 0 against the last build before Faraday, bit for bit

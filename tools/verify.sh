@@ -424,7 +424,7 @@ step "Faraday shader mutants"
 if [[ "${MUTANTS:-0}" == "1" ]]; then
 	python3 tools/mutate.py
 else
-	echo "   skipped: set MUTANTS=1 (one-character mutants of the four Faraday shaders, about eight minutes)"
+	echo "   skipped: set MUTANTS=1 (one-character mutants of the four Faraday shaders)"
 fi
 
 #---------------------------------------------------------------------------
