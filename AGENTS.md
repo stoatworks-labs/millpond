@@ -670,20 +670,30 @@ unless stated:
 - **The bass envelope's time constants** are not checked: the sweep shows
   Bass Bins is live, and the checks feed a drone. Resolume's bins are
   unmeasured.
-- **The demo** (`demo/`) has no Faraday: it carries the eight v0.1.0 shaders,
-  and the four new ones are not in `demo/plugin.js`.
+- **The demo's Faraday** (`demo/`) is checked only partly. The four shaders
+  are the plugin's text, held by `check_shaders.py`. The CPU half
+  (`PlanShake`, the bass envelope, the chunks) is a hand port, compared once by
+  hand with a C++ build and with `mptest` (see "The browser demo"). Nothing
+  re-runs that comparison. The page's bass is generated, not Resolume's FFT.
 
 ## The browser demo
 
 `demo/` is the page at **millpond-demo.stoatworks-labs.com**, built on the shared kit in `infrastructure/stoatworks-backend/resolume-demo/`, vendored into `demo/vendor/` by its `sync.sh` — fix a kit bug THERE, never here. There is no build step: `cf-run npx wrangler deploy` from the repo root uploads `demo/` as it stands, and the page is verified by content (its `<title>`), never by status code.
 
-**What is the plugin's own code.** All eight shaders — `kVertexShader`,
-`kInjectShader`, `kFFTShader`, `kEvolveShader`, `kCausticVertexShader`,
-`kCausticFragmentShader`, `kBlurShader`, `kCompositeShader` — copied into
-`demo/plugin.js` character for character. `demo/tools/check_shaders.py`
-compares them and `tools/verify.sh` runs it as its "Demo shaders" step. So the
-water on the page is this water: an FFT of the surface every frame, each mode
-advanced exactly, and back.
+**What is the plugin's own code.** All twelve shaders are copied into
+`demo/plugin.js` character for character:
+
+- the eight that move and light the pond: `kVertexShader`, `kInjectShader`,
+  `kFFTShader`, `kEvolveShader`, `kCausticVertexShader`,
+  `kCausticFragmentShader`, `kBlurShader` and `kCompositeShader`;
+- the four Faraday passes: `kFaradayEnvelopeShader`, `kFaradayKernelShader`,
+  `kFaradayStateShader` and `kFaradayEvolveShader`.
+
+`demo/tools/check_shaders.py` compares them and `tools/verify.sh` runs it as
+its "Demo shaders" step. So the water on the page is this water. Every frame
+the surface goes through an FFT, each mode is advanced exactly, and it comes
+back. Once the pond is shaken, each mode is a damped Mathieu oscillator
+advanced by the same Magnus steps.
 
 **What is a port, checked by a reader and nothing else.** `Controls.cpp`, the
 CPU half of `Physics.cpp` (`Omega`, `GroupVelocity`, `SkimSchedule`,
@@ -700,6 +710,85 @@ block from `Controls.h / Controls.cpp, ported` to `The plugin's frame` out of
 one-file C++ program built against `source/Physics.cpp` and
 `source/Controls.cpp`.
 
+**The Faraday half is a port too, checked the same way.** It covers:
+
+- the six Faraday conversions in `Controls.cpp`;
+- all of `Faraday.cpp`: `CriticalWavenumber`, `ThresholdAcceleration`,
+  `ShakenDamping`, `Bass`, `Strobe`, `DriveTable` and `Wrap`;
+- `PlanShake`, `ShakeState` and the shaken branch of `Simulate`;
+- `ProcessOpenGL`'s 1/30 s chunks.
+
+**`PlanShake` was cross-checked by hand once, on 2026-11-18, and nothing
+re-runs it.** The C++ side was a one-file program built against
+`source/Faraday.cpp`, `source/Controls.cpp` and `source/Physics.cpp`, with
+`PlanShake`'s body copied in. The JS side was the port, sliced out under node.
+Both ran 240 frames at three settings. The frame times included 60 fps, a
+1/30 s frame, a 0.6 s stall (clamped to 0.25 s) and 24 fps. The settings were:
+
+- the defaults, fed the harness's drone;
+- Shake 0.375, Drive 0.7, Damping 0, Slow Motion 0, Hexagons, Bass Bins 0.47,
+  Depth 0.3, Surface Tension 0.2 and Viscosity 0.55, fed the kick;
+- Shake 1, Drive 0.06, Damping 0.85, Slow Motion 1, Stripes, Bass Bins 1 and
+  Speed 3, fed the drone 4 s on and 4 s off.
+
+Against the C++ built with `-ffp-contract=off`, every output was the same bit
+for bit: the conversions, the bass envelope, k_c, ω_c, γ_c, the threshold, the
+acceleration, β, θ0, the substep count, the drive table and the chunks. There
+was one exception. At the second setting, γ_c, the threshold, β and the
+acceleration differ by 6.5e-8 relative. That residue is v0.1.0's viscosity
+conversion: at 0.55 the page's is one float ulp off the C++'s. It is left
+alone, because fixing it would change the Shake-0 page.
+
+At the defaults, both sides give k_c = 94.370625306338241 rad/m, a threshold
+of 2.6869136114900232 m/s² and γ_c = 2.0178118682150274 /s.
+
+Against the default build, the bass envelope differs by up to 4.1e-7 relative,
+and θ0 by up to 2.7e-15. On arm64, clang's `-ffp-contract=on` fuses the float
+arithmetic in `Bass::Update` into multiply-adds. The x86_64 slice and MSVC do
+not, and the page rounds every operation, so it matches the unfused builds.
+
+Two parts of the port needed that rounding to match bit for bit:
+
+- the Faraday conversions (`geometricF32`), which round to float at each of
+  the C++'s operations. v0.1.0's `geometric` is one ulp off at some settings.
+- the bass envelope.
+
+To redo the check, slice from `Controls.h / Controls.cpp, ported` to `The
+plugin's frame` as above.
+
+**Measured against `mptest` once, on 2026-11-18.** The setup:
+
+- `mptest` and the page both ran at 640 x 360, Detail 512, on mptest's own card
+  (fed to the page as the user's image).
+- Both used the same generated feed.
+- The page ran headless on SwiftShader, at exactly 60 fps, with its clock
+  forced to frame/60 the way mptest's rig is.
+
+Results:
+
+| Run | Frames | Surface (η, η_t, slopes), relative RMS difference | Picture, mean difference |
+|---|---|---|---|
+| Shake 0 | 180 | 3e-3, correlation 0.999997 | 0.23 levels |
+| Shake 0.5, drone | 180 | 1e-5, Ã 0.0806 mm on both | 0.25 levels |
+| Shake 0.5, Hexagons, drone | 600 | 8e-5, Ã 0.4496 mm on both | 0.8 levels, 98% of pixels within 8 |
+| Shake 1, Squares, kick | 600 | 4e-5, Ã 0.2269 mm on both | 0.6 levels |
+| Shake 0.5, Stripes, Walls, Slow Motion 1×, Damping 0, drone | 600 | 2e-5 | 0.25 levels |
+
+The Shake 0 difference is presumably v0.1.0's evolve, whose built-in
+transcendentals differ between GPUs.
+
+**Trap: the page's own clock.** Run with the page's own clock, which
+accumulates float frame times, the kick run drifted to 17% of the RMS by frame
+600 (Ã 0.2357 mm against 0.2269). The shaken pond amplifies a clock difference
+of a few ulp. A comparison with `mptest` has to pin the clock.
+
+Not checked against the plugin:
+
+- any frame rate other than 60;
+- Detail 1024 with the caustics, which SwiftShader cannot run in time;
+- the test bass's on/off feed;
+- any real GPU.
+
 ### The decisions, and why
 
 - **Drop, Skim and Still are booleans the renderer releases**, readout's Fire
@@ -708,9 +797,35 @@ one-file C++ program built against `source/Physics.cpp` and
   and why it blinks. That is also the answer to the Arena gate's blind spot:
   here a visitor presses them. A `?drop=1` in the URL fires one pebble on load,
   which is how the page was verified headlessly.
-- **Audio, Audio Pebbles and Audio Rain are absent, not dead.** With no spectrum
-  the plugin's analyser never fires and reports a level of 0, so the page drops
-  exactly the pebbles and rain the plugin would.
+- **Shake runs on a generated test bass, never a microphone.** This follows
+  needle's precedent. Each frame the page writes 64 bins into the spectrum the
+  plugin would read from Resolume's FFT buffer. They are chosen from the kit's
+  one transport dropdown, "Test bass" (`?bass=` in the URL):
+  - `drone`, the default: `mptest --drone`'s feed, the lowest four bins at 1
+    and the rest at 0.05;
+  - `comesAndGoes`: the same drone, 4 s on and 4 s off, so the lattice is seen
+    to stand up and lie down;
+  - `kick`: `mptest --kick`'s feed, a kick in the lowest two bins twice a
+    second over a pad of 0.5;
+  - `silence`.
+
+  The plugin's own bass envelope reads those bins, ported. The page says the
+  same thing in three places: in the banner, in a note under the transport,
+  and in the disclosure. The banner says: "There is no audio here: Shake is
+  driven by a generated test bass that this page writes into the plugin's
+  64-bin spectrum itself. That is not Resolume's FFT, whose bins nobody has
+  measured." A line under the picture says, each frame, what `PlanShake` made
+  of it.
+- **Audio, Audio Pebbles and Audio Rain are still absent, not dead.** The
+  onset analyser behind them is not ported. Both amounts default to 0, and at
+  0 the plugin drops no audio pebble and adds no audio rain whatever the
+  spectrum holds. So, with the test bass playing, the page drops exactly the
+  pebbles and rain the plugin would.
+- **A Faraday shader that will not compile disables Shake and says so**, as
+  the plugin does when a driver refuses one. The rest of the page runs, and at
+  Shake 0 none of the Faraday passes runs. That is v0.1.0's frame, and the
+  page is bit for bit the page before Faraday: canvas and surface agreed over
+  240 frames at two settings, checked on 2026-11-18.
 - **Three float extensions, and each one's absence throws.**
   `EXT_color_buffer_float` (RG32F spectrum, RGBA32F surface, R32F caustics),
   `EXT_float_blend` (the caustic mesh adds into R32F) and
@@ -721,8 +836,8 @@ one-file C++ program built against `source/Physics.cpp` and
   surface with `Wrap::Repeat` because the domain is periodic, so the page sets
   REPEAT itself after each `ensure()`.
 - **The clock is the page's, in seconds**, so the unit vote has nothing to do;
-  the quarter-second clamp per frame is kept. **Restart stills the water**, which
-  the plugin has no control for.
+  the quarter-second clamp per frame is kept. **Restart stills the water** and
+  restarts the test bass, which the plugin has no control for.
 - **Detail stays at the plugin's default, 1024.** A real GPU runs it in the
   browser without trouble. Headless Chrome on SwiftShader cannot: the default
   caustic mesh is about 1.1 million vertices, and `cdpshot.py`'s CDP call timed

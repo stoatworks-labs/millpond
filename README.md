@@ -287,13 +287,18 @@ Shake reaches); a pattern chosen from the fluid's own physics rather than by
 the Pattern control; and what Resolume's FFT bins are.
 
 **Browser demo:** [millpond-demo.stoatworks-labs.com](https://millpond-demo.stoatworks-labs.com)
-runs the plugin's eight shaders (the FFT, the exact propagator, the caustic
-mesh and the composite) ported to WebGL2, and `demo/tools/check_shaders.py`
-holds that GLSL character-for-character against `source/Shaders.cpp`
-(`tools/verify.sh` runs it). The CPU half (the controls, the skim schedule, the
-PCG rain, the grid and the frame sequence) is a hand translation to JavaScript
-that nothing checks but somebody reading it. Drop, Skim and Still are buttons there; the
-audio controls and the Faraday controls are absent.
+runs the plugin's twelve shaders ported to WebGL2: the FFT, the exact
+propagator, the caustic mesh and the composite, plus the four Faraday passes.
+`demo/tools/check_shaders.py` holds that GLSL character-for-character against
+`source/Shaders.cpp` (`tools/verify.sh` runs it). The CPU half is a hand
+translation to JavaScript that nothing checks except somebody reading it. It
+covers the controls, the skim schedule, the PCG rain, the grid, the shaken
+frame's plan and the frame sequence. Its `PlanShake` was compared once with a
+C++ build. Drop, Skim and Still are buttons there. The demo has no audio and never asks for a microphone. Shake is driven by a
+**generated test bass**, which the page writes into the plugin's 64 FFT bins
+itself: a drone, the drone 4 s on and 4 s off, a kick, or silence. That is not
+Resolume's FFT, whose bins have never been measured. The audio controls (Audio,
+Audio Pebbles, Audio Rain) are absent.
 
 ## Build
 
