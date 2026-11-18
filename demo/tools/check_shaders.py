@@ -29,9 +29,11 @@ so a second escape could only be somebody hiding a difference.
 ------------------------------------------------------------------- what it cannot
 
 Nothing here checks the PORTED half: `Controls.cpp`, the CPU half of
-`Physics.cpp`, `CollectImpacts`, `Simulate`, `Transform`, `Caustics` and
-the frame sequence of `ProcessOpenGL` are hand translations in plugin.js, and
-only a reader can tell whether they still agree.
+`Physics.cpp`, `Faraday.cpp`, `CollectImpacts`, `PlanShake`, `ShakeState`,
+`Simulate`, `Transform`, `Caustics` and the frame sequence of `ProcessOpenGL`
+are hand translations in plugin.js, and only a reader can tell whether they
+still agree. Nor does it check the generated test bass, which is the page's
+own and not the plugin's.
 """
 import os
 import re
@@ -50,6 +52,11 @@ SHADERS = [
     ("CAUSTIC_FRAGMENT", "kCausticFragmentShader"),
     ("BLUR", "kBlurShader"),
     ("COMPOSITE", "kCompositeShader"),
+    # Faraday: only while the tank is shaken.
+    ("FARADAY_ENVELOPE", "kFaradayEnvelopeShader"),
+    ("FARADAY_KERNEL", "kFaradayKernelShader"),
+    ("FARADAY_STATE", "kFaradayStateShader"),
+    ("FARADAY_EVOLVE", "kFaradayEvolveShader"),
 ]
 
 # No pass is assembled at run time: every shader is one whole string.
