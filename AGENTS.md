@@ -524,6 +524,16 @@ two.
 is the scheme's truncation, Magnus in double against RK4. Its negative
 control first perturbed the RK4 that set the budget too, and passed.
 
+**Resolume's AV demo `.mov` clips have no sound track.** In Arena 7.29.0 on
+a Mac (2026-11-19, v0.2.0), `Beat 001.mov` playing gave the plugin a silent
+FFT; ffprobe shows it is video only, and its sound is `Beat 001.wav`. With
+the `.wav` on another layer and Audio on Composition the lattice stood up and
+pulsed with the beat. On a clip with its own sound track, Local and
+Composition both deliver it; External delivered nothing. Arena's REST lists an
+`audio` block for a silent clip too, so that is no proof of sound. Earlier
+fleet releases that found "Resolume's FFT reaches nothing" had tested with
+the `.mov`.
+
 ### Every Faraday check, and where its tolerance comes from
 
 Asked of each: **would this hold on another rasteriser, at another raster?**
@@ -656,9 +666,11 @@ unless stated:
 
 ### What is not verified
 
-- **Never in a host.** Not loaded in Arena on any platform, not built on
-  Windows, never run on a GPU that is not this Mac's. The software renderer
-  in these checks is Apple's, not win-lab's llvmpipe.
+- **One short run in a host.** v0.2.0 ran in Arena 7.29.0 on this Mac
+  (every control, the lattice driven by a `.wav` through Resolume's FFT; see
+  the README's Status). win-lab's llvmpipe Arena has no sound device, so
+  the controls that need bass cannot be tried there. Never in a show, never timed in a host, never on another GPU. The software
+  renderer in these checks is Apple's, not win-lab's llvmpipe.
 - **The model, not nature.** Damped Mathieu with Lamb's damping is
   quantitatively wrong against the exact viscous Floquet threshold (Kumar &
   Tuckerman §5); `--onset` checks the model's tongue. Damping stands in for
@@ -823,11 +835,12 @@ Not checked against the plugin:
   pebbles and rain the plugin would.
 - **A photosensitivity warning heads the page** (`#photosensitivity`, styled
   in `demo/millpond.css`, hidden under `?embed=1` as bolometer's is). The
-  v0.2.0 release's flash survey measured it with xenon's rule: eight of
-  Resolume's demo clips, each with its own bass, at full Shake. At Slow
-  Motion 1× the picture flashed up to 10 times a second, and 20 at a 20 Hz
-  Drive. At the default 8×, it stayed at 2 a second or under, except on a clip
-  that already flickers. The lattice is also a regular pattern across the
+  v0.2.0 release's flash survey measured it with xenon's rule: ten pairings
+  of seven of Resolume's demo clips with its demo bass and beat stems, a
+  generated drone and a generated kick, at full Shake. At Slow Motion 1× the
+  picture flashed up to 10 times a second, and 20 at a 20 Hz Drive. At the
+  default 8×, it stayed at 2 a second or under, except on a clip that already
+  flickers (the README and the guide have the table). The lattice is also a regular pattern across the
   whole frame. Keep the warning while Shake is on the page. Never change a
   default to avoid it.
 - **A Faraday shader that will not compile disables Shake and says so**, as

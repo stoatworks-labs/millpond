@@ -1,21 +1,33 @@
 # millpond
 
 > **AI-assisted project.** This codebase was created with [Claude](https://claude.com/claude-code)
-> (Anthropic), directed and reviewed by a human author. It's **never been
-> loaded into Resolume on a Mac**, only into Arena on Windows, on a software
-> rasteriser. Everything below is measured by an offline harness
+> (Anthropic), directed and reviewed by a human author. It has run in
+> Resolume only briefly: Arena 7.27.1 on Windows, on a software rasteriser, and
+> Arena 7.29.0 on a Mac, where the Faraday waves new in v0.2.0 pulsed to a
+> music file in the composition. It has never been in a show. Everything below
+> is measured by an offline harness
 > that drives the plugin's own class in a headless GL context: the water against
 > the exact Cauchy–Poisson integral, evaluated in double precision (they agree to
 > **0.01%**), and the light against Snell and Fresnel, with every check also run
 > against a wrong model to show it can fail. The full rundown is under
 > [Status](#status).
 
+> **Photosensitivity warning.** Faraday waves (Shake, off by default) can flash.
+> At the default Slow Motion 8× the lattice reverses about 1.25 times a second,
+> but at Slow Motion 1× or 2× and full Shake, over Resolume's demo clips and
+> bass, the picture flashed up to **10 times a second** (20 at a 20 Hz Drive),
+> far over the three-a-second line in Ofcom's and WCAG's guidance. The lattice
+> is also a strong regular pattern over the whole frame, which ITU-R BT.1702 and
+> Ofcom treat as a hazard of its own. See [Faraday waves](#faraday-waves) and
+> the guide's [flashing section](https://stoatworks-labs.com/software/millpond/guide/#flashing-and-keeping-it-safe).
+
 Ripples for Resolume Arena and Avenue, as an FFGL effect. Drop a pebble, skim a
 stone or let it rain. The clip becomes the bed of a pond, and you look down at it
 through the water. It's the only water feature a venue will happily let you put
 on stage.
 
-The [project page](https://stoatworks-labs.com/software/millpond/) has the downloads and the video.
+The [project page](https://stoatworks-labs.com/software/millpond/) has the downloads and the video, and
+the [user guide](https://stoatworks-labs.com/software/millpond/guide/) explains every control.
 
 ![A pond bed of stones seen through rippled water: a skimmed stone's line of rings across the lower left, a pebble's rings, rain, and a net of sunlight on the bed](docs/hero.png)
 
@@ -159,7 +171,12 @@ started.
   loss, 0 to 30 per second, default 2), Slow Motion (a stroboscope, 1 to
   100×, default 8), Pattern (Stripes, Squares or Hexagons) and Bass Bins
   (how many of the host's lowest FFT bins count as bass, default 2). They
-  sit after the About block, so v0.1.0 compositions load unchanged.
+  sit after the About block, as ids 40–45, so v0.1.0 compositions load
+  unchanged.
+- **About:** the name, version and licence, and buttons that open the user
+  guide (new in v0.2.0), the project page, the source and the support page.
+  v0.1.0's three buttons each moved down one id to make room; they are
+  buttons and hold no state, and ids 0–35 are exactly v0.1.0's.
 
 A camera looking straight down only sees the sun in a facet tilted by half the
 sun's zenith angle. Ripples rarely tilt more than a few degrees, so glints
@@ -187,14 +204,61 @@ lattice still stands up and lies down with the music, but the oscillation is
 seen 8 times slower. Anything that isn't the lattice (rain, pebbles) is seen
 in jumps. Slow Motion 1 turns it off.
 
+**It can flash, and the lattice is a strong regular pattern.** Measured with
+xenon's rule (whole frame and third-of-frame windows, linear light, 640×360 at
+60 fps, 20 s each) over ten pairings: seven of Resolume's demo clips under its
+demo bass and beat stems, a generated drone and a generated kick.
+
+| | over 3 flashes/s | worst second |
+| --- | --- | --- |
+| Shake 0 (the default), or Shake ½ at any Slow Motion | 0 of 10 | 2.5 flashes, the clip's own |
+| full Shake, Slow Motion 8× | 1 of 10 | 3.5, on a clip that flickers 2.5 bare |
+| full Shake, Slow Motion 2× | 7 of 10 | 5.5 |
+| full Shake, Slow Motion 1× | 8 of 10 | 10.5, the whole frame too |
+| full Shake, Slow Motion 1×, Drive 20 Hz | 6 of 10 | 20.5 |
+
+So the warning is in this README, the guide, the release notes and the demo,
+and the defaults stay as built: Shake 0, and Slow Motion 8× when it's on. At
+full Shake the lattice is twenty or more light and dark cells up the frame,
+over all of it, oscillating: the kind of regular pattern ITU-R BT.1702 and
+Ofcom's guidance treat as a hazard whatever the flash rate. Keep Shake low or
+Mix down if anyone watching may be photosensitive.
+
 ## Status
 
-**v0.1.0, 2026-09-23, and still early days.**
+**v0.2.0, 2026-11-19, and still early days.** v0.2.0 adds Faraday waves
+and the user guide. With Shake at 0, the default, it is v0.1.0 bit for bit.
 
-It's been loaded into **Resolume Arena 7.27.1 on Windows only, and only on
-a software rasteriser**. The machine is win-lab, an x64 Windows 11 VM with
-no GPU, where OpenGL is Mesa llvmpipe 26.2.0. The DLL was built there with
-MSVC 2022 and vcpkg's `x64-windows-static-md`. In Arena:
+**In Arena 7.29.0 on a Mac** (Apple Silicon, v0.2.0, 2026-11-19), in a scratch
+composition driven over Arena's REST API and read from its output snapshots:
+
+- it registered as `SW Millpond` with all 47 controls (Arena's Opacity and
+  Audio picker included), each with its declared name, order, type and
+  default. The About line reads `Millpond v0.2.0 - MIT - Stoatworks Labs,
+  stoatworks-labs.com`;
+- Mix 0 was the clip exactly. With Rain at 0 the water settled to the clip
+  plus the sky's reflection, a Drop press rang it, and rain kept it moving;
+- **Resolume's FFT reached it.** With Shake at full, Slow Motion 1× and View
+  Height, and Resolume's demo `Bass 001.wav` or `Beat 001.wav` playing on
+  another layer with Audio on Composition, the lattice stood up and pulsed
+  with the beat: the mean change between snapshots a tenth of a second apart
+  was 4 to 87 levels, against 0.3 in silence. It lay down again when the clip
+  was cleared;
+- with a video file carrying its own sound, and Millpond on that clip, Audio
+  on Local (4 to 127) and on Composition (2 to 113) both drove it. External
+  heard nothing (0.3);
+- **Resolume's demo `.mov` clips in its AV folder have no sound track**
+  (ffprobe: video only; the sound is the matching `.wav`). With `Beat
+  001.mov` playing, Millpond heard silence (0.3);
+- with Shake at full and no bass, the rain calmed (0.3 to 0.7, against 2.7 to
+  4.3 at Shake 0): Damping acts on every ripple while Shake is on;
+- the picture at Shake 0 was not compared pixel for pixel with v0.1.0's inside
+  Arena. Offline, `tools/offcompare.sh` finds the two bit-identical.
+
+**In Arena 7.27.1 on Windows**, on win-lab, an x64 Windows 11 VM with no
+GPU, where OpenGL is Mesa llvmpipe 26.2.0, v0.1.0 was loaded on 2026-09-23.
+The DLL was built there with MSVC 2022 and vcpkg's
+`x64-windows-static-md`. In Arena:
 
 - it loaded, and was registered and listed as `SW Millpond` / `MP01`, an
   effect;
@@ -212,9 +276,14 @@ or Skim, so it can't see them. The harness here measures all five live. The
 rest of the controls moved the picture, but the rain keeps the water moving
 on its own, so a pass there says less than it would for a still picture.
 
-`oxbow selftest` on the same VM rendered 120 frames with no GL error. Nothing
-is known about performance on Windows, and it's never been loaded into Arena on
-macOS. Offline, `oxbow probe` reads the bundle the way a host does, and
+`oxbow selftest` on the same VM rendered 120 frames with no GL error.
+
+**v0.2.0 on Windows** goes through the fleet's Arena gate on win-lab after
+the tag, on the release's own DLL. Until that result is here, nothing in this
+README claims a Windows result for v0.2.0.
+
+Nothing is known about performance in Resolume or on Windows. Offline,
+`oxbow probe` reads the bundle the way a host does, and
 `oxbow selftest` instantiates it through the host's own path. There's no OpenFX
 port and there are no factory presets. Everything below was built and measured
 on macOS (Apple Silicon, M4 Max).
@@ -264,9 +333,9 @@ What **isn't** verified yet:
   slower one. `--banks` measures it on a half-metre pond; nothing has measured
   the reflection of a sponge that strong on the shortest ripples.
 
-**Faraday waves** are new since v0.1.0 and have never been loaded into a
-host. Measured on this Mac, on the GPU at 320×180 and 1280×720 and on Apple's
-software renderer:
+**Faraday waves** are new in v0.2.0. Beyond the Arena run above, everything
+about them is measured on this Mac, on the GPU at 320×180 and 1280×720 and on
+Apple's software renderer:
 
 | | |
 | --- | --- |
@@ -280,11 +349,26 @@ software renderer:
 | dead controls | **37** parameters, all live |
 | cost | `mptest --bench` at Detail 1024, one run: shaken at 10 Hz, **1.5 ms/frame at 720p and 1.7 at 1080p**, against 0.95 and 1.0 off. With the default 8× stroboscope the mean is 2.5 and 2.2 ms, and the frames where the water catches up a whole response period cost up to 12 ms (seven passes) |
 
-What isn't verified: anything in a host or on another GPU; the model's
-accuracy against real water (damped Mathieu with Lamb's damping is known to
-be quantitatively off, and the waves stay linear even at the steepness a full
-Shake reaches); a pattern chosen from the fluid's own physics rather than by
-the Pattern control; and what Resolume's FFT bins are.
+What isn't verified: more than one short run in a host, and any GPU but this
+Mac's; the model's accuracy against real water (damped Mathieu with Lamb's
+damping is known to be quantitatively off, and the waves stay linear even at
+the steepness a full Shake reaches); a pattern chosen from the fluid's own
+physics rather than by the Pattern control; and what Resolume's FFT bins are.
+
+Open, as built:
+
+- **The default Pattern, Squares, isn't what the literature predicts at the
+  default 10 Hz** (Chen & Viñals predict stripes for gravity waves; Kudrolli &
+  Gollub saw hexagons below 25 Hz, in silicone oil). It's the default because
+  it reads as a lattice.
+- **Slow Motion is on at 8× by default**, for photosensitivity, so the rain
+  and pebbles are seen in jumps whenever Shake is above 0.
+- **With Shake on, silence still changes the pond**: Damping calms every
+  ripple and Slow Motion judders the rain (measured in Arena above).
+- **The bass is normalised to its own peak over the last 3 s**, so a quiet
+  track shakes as hard as a loud one; the saturation that holds the lattice's
+  height is a fixed constant; and the defaults (10 Hz, Damping 2/s, Bass Bins
+  2) are starting points, not measurements.
 
 **Browser demo:** [millpond-demo.stoatworks-labs.com](https://millpond-demo.stoatworks-labs.com)
 runs the plugin's twelve shaders ported to WebGL2: the FFT, the exact
