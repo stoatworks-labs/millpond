@@ -279,35 +279,53 @@ on its own, so a pass there says less than it would for a still picture.
 `oxbow selftest` on the same VM rendered 120 frames with no GL error.
 
 **v0.2.0 on Windows**, on the same VM and Arena on 2026-11-19, went through
-the fleet's Arena gate (`plugin-bench/arena/arenaprobe.py`) on the release's
-own `Millpond.dll` (sha256 `5d9cf148…61f37`):
+the fleet's Arena gate (`plugin-bench/arena/arenaprobe.py`) twice, both times
+on the release's own `Millpond.dll` (sha256 `5d9cf148…61f37`). The second
+run **passed: 9 passed, 0 failed, 2 skipped**.
 
-- it loaded, and was registered and listed as `SW Millpond` / `MP01`, an
-  effect;
-- all 47 controls came back with the declared name, order, type, range and
-  default, and the two names at Arena's length limit were complete;
-- it rendered: at its defaults, 43,602 pixels of the thumbnail and 1.51
-  levels on average away from the clip, against a noise floor of 0.64;
+- It loaded, and was registered and listed as `SW Millpond` / `MP01`, an
+  effect.
+- All 47 controls came back with the declared name, order, type, range and
+  default, and the two names at Arena's length limit were complete.
+- It rendered. At its defaults the frame was 44,002 pixels of the thumbnail
+  and 1.53 levels on average away from the clip, against a noise floor of
+  0.64. The first run measured 43,602 pixels and 1.51 levels.
+- 16 controls moved the picture, Arena's Opacity included. Detail and Shake
+  were inconclusive.
 - Arena stayed up (one process throughout) and logged no shader or error
   lines.
 
-The gate failed on its control sweep. 15 controls (Arena's Opacity included)
-moved the picture, Banks, Detail and Shake were inconclusive, and six read as
-dead: Surface Tension, Viscosity, Sun Azimuth, Glint, Damping and Slow Motion.
+The two skips are controls the gate can't test there:
+- win-lab has no sound device, so the seven controls that need bass weren't
+  tried (Audio, Audio Pebbles, Audio Rain, Drive, Slow Motion, Pattern and
+  Bass Bins). The lattice has never been seen on Windows.
+- 14 controls are marked as out of the gate's reach. Nine act on the next
+  pebble or skim and need a press the gate never sends. The other five change
+  the rain rather than the picture: Surface Tension, Viscosity, Sun Azimuth,
+  Glint and Damping.
+
+The pass doesn't mean the gate saw those last five act. The first run, on the
+same DLL, failed its control sweep with **8 passed, 1 failed, 2 skipped**. It
+read six controls as dead: those five and Slow Motion. 15 controls moved the
+picture, and Banks, Detail and Shake were inconclusive.
+
 The sweep compares 320×240 thumbnails of a picture the rain keeps moving, and
-each of the six changes the rain rather than the picture: the first two shape
-how its rings spread, Sun Azimuth and Glint light only its sparkles, Damping
-changes how much it moves, and Slow Motion retimes it. Damping was then
-measured directly on the same Arena. With Shake at 1 and no bass, the mean
-difference between any two of six thumbnails about 0.8 s apart was 0.712
-levels at Damping 0, 0.068 at the default and 0.003 at full, against 0.774 at
-Shake 0: it acts. Slow Motion changed nothing a still can see (0.054 at 1×,
-0.068 at 8×, 0.038 at 100×). The other four weren't measured further there.
-`tools/sweep.py` finds all six change the frame. win-lab has no sound device,
-so the six controls that need bass (Audio, Audio Pebbles, Audio Rain, Drive,
-Pattern, Bass Bins) weren't tried, and the lattice has never been seen on
-Windows. The nine that act on the next pebble or skim need a press the gate
-never sends.
+each of the six changes the rain rather than the picture:
+- Surface Tension and Viscosity shape how its rings spread.
+- Sun Azimuth and Glint light only its sparkles.
+- Damping changes how much it moves.
+- Slow Motion retimes it.
+
+Damping was then measured directly on the same Arena. With Shake at 1 and no
+bass, the mean difference between any two of six thumbnails about 0.8 s apart
+was 0.712 levels at Damping 0, 0.068 at the default and 0.003 at full, against
+0.774 at Shake 0, so it acts. Slow Motion changed nothing a still can see
+(0.054 at 1×, 0.068 at 8×, 0.038 at 100×). The other four weren't measured
+further there. `tools/sweep.py` finds all six change the frame.
+
+The gate's expectation was then changed to mark the five as out of its reach,
+with those numbers, and Slow Motion as needing audio. The second run used
+that expectation.
 
 Nothing is known about performance in Resolume or on Windows. Offline,
 `oxbow probe` reads the bundle the way a host does, and

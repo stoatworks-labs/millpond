@@ -107,9 +107,11 @@ Damping, Slow Motion, Pattern, Bass Bins); the spec is
   v0.1.0 on 2026-09-23. In Resolume only briefly: Arena 7.27.1 on win-lab
   (llvmpipe, no GPU, no sound device) and Arena 7.29.0 on this Mac, where
   Resolume's FFT drove the lattice from a `.wav` (the AV folder's `.mov`
-  clips have no sound track). v0.2.0's release DLL passed win-lab's gate
-  except its control sweep, which read six controls that change the rain
-  rather than the picture as dead (Damping, measured directly there, acts). See
+  clips have no sound track). v0.2.0's release DLL failed win-lab's gate
+  once (8/1/2: the sweep read six controls that change the rain rather than
+  the picture as dead; Damping, measured directly there, acts), then passed
+  it 9/0/2 on 2026-11-19 against plugin-bench's `dcd55fc` expectation, which
+  marks five of them out of the gate's reach and Slow Motion as audio. See
   the README's Status. Never in a show. No OFX port or factory presets.
 - Faraday's open questions (the default Pattern, Slow Motion on by default,
   silence still calming the pond with Shake on, the fixed saturation) are in

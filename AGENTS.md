@@ -329,7 +329,9 @@ Assumed, or not yet done:
   the rain, which stills cannot see. The other four rest on `tools/sweep.py`
   and on Shake 0 running v0.1.0's code; nobody has looked at them on Windows
   any closer. `plugin-bench/arena/expect/millpond.json` now marks the six
-  with the numbers. v0.2.0 also ran in Arena 7.29.0 on this Mac (the README's Status).
+  with the numbers (`dcd55fc`), and the gate re-run against it on the same
+  release DLL passed 9/0/2 (16 live, Detail and Shake inconclusive; the first
+  run was 8/1/2). v0.2.0 also ran in Arena 7.29.0 on this Mac (the README's Status).
   Still unknown: anything on a GPU other than this Mac's, the Faraday lattice
   on Windows, whether the XPOS/YPOS pair shows as a position pad, and how the
   event parameters behave under a real click (only REST presses so far).
