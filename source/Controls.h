@@ -92,20 +92,30 @@ enum ParamId : unsigned int
 	// Millpond.cpp static_asserts this run against `about::kParamCount`, so a
 	// user guide (which adds a link) cannot shift PT_COUNT silently.
 	//
-	// Last in the enum so no saved composition's parameter ids shift.
+	// It was last in v0.1.0's enum, so no saved composition's ids shifted.
+	//
+	// v0.2.0 published the user guide, and the generated block put its
+	// "User guide" button FIRST (the shared header's order), so v0.1.0's
+	// three buttons each moved down one and a fourth id was added. Only
+	// events moved: they carry no state, and ids 0-35 (every control and the
+	// About line) are exactly v0.1.0's (tools/offcompare.sh compares them).
 	PT_ABOUT_TEXT,
 	PT_ABOUT_BUTTON_1,
 	PT_ABOUT_BUTTON_2,
 	PT_ABOUT_BUTTON_3,
+	PT_ABOUT_BUTTON_4,
 
 	// -- Faraday ------------------------------------------------------------
 	// The tank shaken up and down by the bass (SPEC-millpond-faraday.md).
 	//
-	// Appended AFTER the About run, not before it: v0.1.0 compositions store
+	// Appended AFTER the About run, not before it: compositions store
 	// parameters by index and the About run was last, so this is the only
-	// place six new ids can go without moving one an operator has saved. The
-	// group therefore shows after About. A user guide's link button, should
-	// one ever be added, has to go after this group too.
+	// place new ids can go without moving one an operator has saved. The
+	// group therefore shows after About. These were ids 39-44 while unreleased;
+	// the guide's About button moved them to 40-45 before v0.2.0, the first
+	// release to carry them, so nothing saved ever used the old ids. From
+	// v0.2.0 on they are fixed: any further link button, or any new control,
+	// goes after this group.
 	//
 	// Shake at 0 is off: none of the Faraday code runs and millpond is v0.1.0
 	// bit for bit, whatever the other five say.

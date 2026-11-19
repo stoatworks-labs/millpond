@@ -21,8 +21,12 @@
 
     Per scene it writes the output picture (RGBA float), the surface
     (eta, eta_t / 40, eta_x, eta_y per grid cell) and the caustic buffer, and
-    once the parameter table v0.1.0 declared: names, kinds and defaults, which
-    a saved composition depends on.
+    once the stateful part of the parameter table v0.1.0 declared: ids 0-35,
+    every control and the About line, with names, kinds and defaults, which a
+    saved composition depends on. v0.1.0's three About buttons (36-38) are
+    left out: they are events, which hold no state, and v0.2.0's generated
+    block put its new "User guide" button first, so their labels moved down
+    one (Controls.h).
 
     A newer build also renders every scene a second time with the five other
     Faraday controls at their far ends and Shake at 0 ("far"); both of its
@@ -55,8 +59,17 @@ namespace
 using Floats = std::vector< float >;
 
 /// The number of parameters v0.1.0 declared: everything up to the About block's
-/// last button. A newer build must declare these first, unchanged.
+/// last button.
 constexpr unsigned int kV010Params = 39;
+
+/// The ones that carry state: every control and the About line (ids 0-35). A
+/// newer build must declare these first, unchanged. The About buttons after
+/// them are events, and the user guide's button relabelled them in v0.2.0.
+constexpr unsigned int kV010Stateful = 36;
+
+/// The six Faraday controls are the last six ids in a build that has them
+/// (40-45 since the guide's button; they were 39-44 before v0.2.0).
+constexpr unsigned int kFaradayCount = 6;
 
 CGLContextObj createContext()
 {
@@ -184,13 +197,14 @@ const Scene kScenes[] = {
 /// defaults. Only a build that has them; Shake (the first of them) stays 0.
 void farEnds( MillpondPlugin& p )
 {
-	if constexpr( PT_COUNT > kV010Params + 5 )
+	if constexpr( PT_COUNT > kV010Params + kFaradayCount - 1 )
 	{
+		constexpr unsigned int shakeId = PT_COUNT - kFaradayCount;
 		const float ends[ 5 ] = { 1.0f, 0.0f, 1.0f, 2.0f, 1.0f };//Drive, Damping, Slow Motion, Pattern, Bass Bins
 		for( unsigned int i = 0; i < 5; ++i )
-			p.SetFloatParameter( kV010Params + 1 + i, ends[ i ] );
+			p.SetFloatParameter( shakeId + 1 + i, ends[ i ] );
 		if( const char* shake = std::getenv( "OFFDUMP_SHAKE" ) )
-			p.SetFloatParameter( kV010Params, static_cast< float >( std::atof( shake ) ) );
+			p.SetFloatParameter( shakeId, static_cast< float >( std::atof( shake ) ) );
 	}
 	else
 		(void)p;
@@ -314,7 +328,7 @@ int main( int argc, char** argv )
 	{
 		MillpondPlugin plugin;
 		std::string table;
-		for( unsigned int i = 0; i < kV010Params; ++i )
+		for( unsigned int i = 0; i < kV010Stateful; ++i )
 		{
 			const char* name = plugin.GetParamName( i );
 			char line[ 256 ];

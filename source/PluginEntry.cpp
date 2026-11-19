@@ -30,7 +30,7 @@ static CFFGLPluginInfo PluginInfo(
 	2,                                                    // API major version number
 	1,                                                    // API minor version number
 	0,                                                    // Plugin major version number
-	1,                                                    // Plugin minor version number
+	2,                                                    // Plugin minor version number
 	FF_EFFECT,                                            // Plugin type
 	"The picture as the bed of a pond, under water that obeys the linear wave equations. Drop a pebble, "
 	"skim a stone or let it rain: the rings, the still disc inside them, the reflections off the banks, "
