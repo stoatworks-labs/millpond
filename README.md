@@ -48,15 +48,15 @@ Resolume.*
 
 ## Download
 
-**[v0.1.0](https://github.com/stoatworks-labs/millpond/releases/tag/v0.1.0)** — prebuilt for macOS and Windows. Pick your platform:
+**[v0.2.0](https://github.com/stoatworks-labs/millpond/releases/tag/v0.2.0)** — prebuilt for macOS and Windows. Pick your platform:
 
 <details>
 <summary><b>macOS</b> — Universal (Apple Silicon + Intel)</summary>
 
 | Build | Download | Size |
 | --- | --- | --- |
-| Universal (Apple Silicon + Intel) · .dmg disk image | [`millpond-0.1.0-macos-universal.dmg`](https://github.com/stoatworks-labs/millpond/releases/download/v0.1.0/millpond-0.1.0-macos-universal.dmg) | 254 KB |
-| Universal (Apple Silicon + Intel) · .zip archive | [`millpond-macos-universal.zip`](https://github.com/stoatworks-labs/millpond/releases/latest/download/millpond-macos-universal.zip) | 214 KB |
+| Universal (Apple Silicon + Intel) · .dmg disk image | [`millpond-0.2.0-macos-universal.dmg`](https://github.com/stoatworks-labs/millpond/releases/download/v0.2.0/millpond-0.2.0-macos-universal.dmg) | 282 KB |
+| Universal (Apple Silicon + Intel) · .zip archive | [`millpond-macos-universal.zip`](https://github.com/stoatworks-labs/millpond/releases/latest/download/millpond-macos-universal.zip) | 232 KB |
 
 </details>
 
@@ -65,8 +65,8 @@ Resolume.*
 
 | Build | Download | Size |
 | --- | --- | --- |
-| x64 · .exe installer | [`millpond-0.1.0-windows-x86_64-setup.exe`](https://github.com/stoatworks-labs/millpond/releases/download/v0.1.0/millpond-0.1.0-windows-x86_64-setup.exe) | 233 KB |
-| x64 · .zip archive | [`millpond-windows-x86_64.zip`](https://github.com/stoatworks-labs/millpond/releases/latest/download/millpond-windows-x86_64.zip) | 126 KB |
+| x64 · .exe installer | [`millpond-0.2.0-windows-x86_64-setup.exe`](https://github.com/stoatworks-labs/millpond/releases/download/v0.2.0/millpond-0.2.0-windows-x86_64-setup.exe) | 267 KB |
+| x64 · .zip archive | [`millpond-windows-x86_64.zip`](https://github.com/stoatworks-labs/millpond/releases/latest/download/millpond-windows-x86_64.zip) | 136 KB |
 
 </details>
 
@@ -278,9 +278,36 @@ on its own, so a pass there says less than it would for a still picture.
 
 `oxbow selftest` on the same VM rendered 120 frames with no GL error.
 
-**v0.2.0 on Windows** goes through the fleet's Arena gate on win-lab after
-the tag, on the release's own DLL. Until that result is here, nothing in this
-README claims a Windows result for v0.2.0.
+**v0.2.0 on Windows**, on the same VM and Arena on 2026-11-19, went through
+the fleet's Arena gate (`plugin-bench/arena/arenaprobe.py`) on the release's
+own `Millpond.dll` (sha256 `5d9cf148…61f37`):
+
+- it loaded, and was registered and listed as `SW Millpond` / `MP01`, an
+  effect;
+- all 47 controls came back with the declared name, order, type, range and
+  default, and the two names at Arena's length limit were complete;
+- it rendered: at its defaults, 43,602 pixels of the thumbnail and 1.51
+  levels on average away from the clip, against a noise floor of 0.64;
+- Arena stayed up (one process throughout) and logged no shader or error
+  lines.
+
+The gate failed on its control sweep. 15 controls (Arena's Opacity included)
+moved the picture, Banks, Detail and Shake were inconclusive, and six read as
+dead: Surface Tension, Viscosity, Sun Azimuth, Glint, Damping and Slow Motion.
+The sweep compares 320×240 thumbnails of a picture the rain keeps moving, and
+each of the six changes the rain rather than the picture: the first two shape
+how its rings spread, Sun Azimuth and Glint light only its sparkles, Damping
+changes how much it moves, and Slow Motion retimes it. Damping was then
+measured directly on the same Arena. With Shake at 1 and no bass, the mean
+difference between any two of six thumbnails about 0.8 s apart was 0.712
+levels at Damping 0, 0.068 at the default and 0.003 at full, against 0.774 at
+Shake 0: it acts. Slow Motion changed nothing a still can see (0.054 at 1×,
+0.068 at 8×, 0.038 at 100×). The other four weren't measured further there.
+`tools/sweep.py` finds all six change the frame. win-lab has no sound device,
+so the six controls that need bass (Audio, Audio Pebbles, Audio Rain, Drive,
+Pattern, Bass Bins) weren't tried, and the lattice has never been seen on
+Windows. The nine that act on the next pebble or skim need a press the gate
+never sends.
 
 Nothing is known about performance in Resolume or on Windows. Offline,
 `oxbow probe` reads the bundle the way a host does, and

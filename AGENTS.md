@@ -314,15 +314,25 @@ frames.
 
 Assumed, or not yet done:
 
-- **Loaded into Resolume only on Windows, on llvmpipe.** In win-lab's Arena
-  7.27.1 (no GPU), `plugin-bench/arena/arenaprobe.py` found it registered and
-  listed, with all 40 controls declared correctly, and saw it render with Arena
-  logging no errors. The plugin voted Arena's clock to be milliseconds. The
-  probe's control sweep never presses Drop or Skim, so it reports Surface
-  Tension, Banks, Pebble Size, Heading and Throw Speed as dead: that is its
-  blind spot, not a defect. Still unknown: anything on macOS Arena, anything
-  on a GPU in Resolume, whether the XPOS/YPOS pair shows as a position pad, and
-  how the event parameters behave under a real click.
+- **In Resolume only briefly.** In win-lab's Arena 7.27.1 (no GPU, no sound
+  device), `plugin-bench/arena/arenaprobe.py` found v0.1.0 and then v0.2.0's
+  release DLL registered and listed, with every control declared correctly
+  (40, then 47), and saw both render with Arena logging no errors. The plugin
+  voted Arena's clock to be milliseconds. The probe's sweep compares 320×240
+  thumbnails of a picture the rain keeps moving and never presses Drop or
+  Skim, so it calls controls dead that change the rain rather than the
+  picture: Surface Tension, Banks, Pebble Size, Heading and Throw Speed for
+  v0.1.0; Surface Tension, Viscosity, Sun Azimuth, Glint, Damping and Slow
+  Motion for v0.2.0. Measured directly on the same Arena, Damping took the
+  motion between thumbnails from 0.712 levels (at 0) through 0.068 (default)
+  to 0.003 (full) under Shake 1, so it acts there; Slow Motion only retimes
+  the rain, which stills cannot see. The other four rest on `tools/sweep.py`
+  and on Shake 0 running v0.1.0's code; nobody has looked at them on Windows
+  any closer. `plugin-bench/arena/expect/millpond.json` now marks the six
+  with the numbers. v0.2.0 also ran in Arena 7.29.0 on this Mac (the README's Status).
+  Still unknown: anything on a GPU other than this Mac's, the Faraday lattice
+  on Windows, whether the XPOS/YPOS pair shows as a position pad, and how the
+  event parameters behave under a real click (only REST presses so far).
 - **Resolume's FFT bins** are assumed to be what rosette assumed; the fleet has
   never measured them.
 - **Windows only on llvmpipe.** It builds under MSVC 2022, and R32F additive
