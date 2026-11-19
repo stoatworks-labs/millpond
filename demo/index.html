@@ -7,6 +7,7 @@
     <meta name="description" content="Try the Millpond ripples FFGL plugin for Resolume in your browser: the plugin's own FFT water, exact capillary-gravity propagator, light-conserving caustics and Fresnel composite, ported to WebGL2. Drop a pebble, skim a stone, let it rain." />
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="./vendor/kit.css" />
+    <link rel="stylesheet" href="./millpond.css" />
     <link rel="canonical" href="https://millpond-demo.stoatworks-labs.com/" />
     <meta name="project-page" content="https://stoatworks-labs.com/software/millpond/" />
     <meta property="og:type" content="website" />
@@ -21,6 +22,26 @@
     <meta name="twitter:card" content="summary_large_image" />
   </head>
   <body>
+    <section class="mp-warning" id="photosensitivity" aria-labelledby="mp-warning-title">
+      <h2 class="mp-warning__title" id="mp-warning-title">Photosensitivity warning</h2>
+      <p>
+        Faraday waves can flash. With <strong>Shake</strong> up, the pond stands up in a lattice
+        that turns inside out as it oscillates, and the light it focuses onto the bed brightens
+        and darkens parts of the picture with it. At the default <strong>Slow Motion</strong> (8×)
+        that is slow, about 1.25 times a second at the default 10 Hz <strong>Drive</strong>. At
+        Slow Motion 1× or 2× it is fast: measured over Resolume's demo clips with their own bass
+        at full Shake, the picture flashed up to 10 times a second (20 at a 20 Hz Drive), far
+        over the three-a-second line in Ofcom's and WCAG's guidance. Flashing light can trigger
+        seizures in people with photosensitive epilepsy.
+      </p>
+      <p>
+        The lattice of stripes, squares or hexagons is also a strong regular pattern across the
+        whole picture, the kind ITU-R BT.1702 and Ofcom's guidance treat as a hazard of their
+        own. This page opens with Shake at 0, where there is no lattice. If anyone watching may
+        be photosensitive, keep Slow Motion at 8× or above.
+      </p>
+    </section>
+
     <main id="demo">
       <noscript>
         <h1>Millpond</h1>

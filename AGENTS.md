@@ -821,6 +821,15 @@ Not checked against the plugin:
   0 the plugin drops no audio pebble and adds no audio rain whatever the
   spectrum holds. So, with the test bass playing, the page drops exactly the
   pebbles and rain the plugin would.
+- **A photosensitivity warning heads the page** (`#photosensitivity`, styled
+  in `demo/millpond.css`, hidden under `?embed=1` as bolometer's is). The
+  v0.2.0 release's flash survey measured it with xenon's rule: eight of
+  Resolume's demo clips, each with its own bass, at full Shake. At Slow
+  Motion 1× the picture flashed up to 10 times a second, and 20 at a 20 Hz
+  Drive. At the default 8×, it stayed at 2 a second or under, except on a clip
+  that already flickers. The lattice is also a regular pattern across the
+  whole frame. Keep the warning while Shake is on the page. Never change a
+  default to avoid it.
 - **A Faraday shader that will not compile disables Shake and says so**, as
   the plugin does when a driver refuses one. The rest of the page runs, and at
   Shake 0 none of the Faraday passes runs. That is v0.1.0's frame, and the

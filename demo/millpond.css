@@ -1,0 +1,35 @@
+/*
+ * Millpond's own addition to the kit's page: the photosensitivity note at the
+ * top, for Faraday waves. Everything else is vendor/kit.css, unedited. The
+ * note is bolometer's and intensifier's, in shape and colour.
+ */
+
+.mp-warning {
+  /* #demo is 1400px wide with a 20px gutter: line up with what is inside it. */
+  max-width: 1360px;
+  margin: 24px auto 0;
+  padding: 14px 18px;
+  background: #1f1a0c;
+  border: 1px solid #5a4613;
+  border-left: 4px solid var(--warn);
+  border-radius: 8px;
+  color: #f3e9cf;
+}
+
+@media (max-width: 1400px) {
+  .mp-warning { margin-left: 20px; margin-right: 20px; }
+}
+@media (max-width: 480px) {
+  .mp-warning { margin-left: 16px; margin-right: 16px; padding: 12px 14px; }
+}
+
+.mp-warning__title {
+  font-size: 17px;
+  color: var(--warn);
+  margin: 0 0 4px;
+}
+
+.mp-warning p { margin: 8px 0 0; max-width: 80ch; font-size: 14px; }
+
+/* body has data-embed when ?embed=1: the note is the page's, not the picture's. */
+body[data-embed] .mp-warning { display: none; }
